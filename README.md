@@ -8,6 +8,10 @@ request-local input forms without patching or rebuilding the Rust application.
 Author: 佐々木隆志 (Takashi Sasaki), <takashi316@gmail.com>,
 [https://x.com/TakashiSasaki](https://x.com/TakashiSasaki). [MIT License](LICENSE).
 
+The [2026-11-04 verification record](docs/compatibility/2026-11-04.md) fixes the
+tested image, source revisions, binaries, protocols and actual verification
+boundary. See [integration instructions](tests/README.md) for reproducible checks.
+
 ```text
 MCP client / tunnel → generic mcp-compat-proxy → this adapter → upstream container
 Explicit private input → fresh upstream STDIO process → private graph → discard
@@ -94,6 +98,15 @@ The generic proxy's `tool_annotations` policy sets `readOnlyHint` independently
 of the upstream image. Wildcard false covers unreviewed tools; each true grant
 is pinned to reviewed input-schema hashes. A mismatch downgrades to false and
 logs a warning. A schema hash cannot detect arbitrary engine behavior changes.
+
+`deploy/read-only-tools.json` contains the audit name list, and
+`deploy/read-only-policy-2.1.0.json` contains the tested schema grants. Merge the
+policy's `tool_annotations` into the generic proxy's existing deployment config.
+After explicitly reviewing a new adapted catalog, regenerate its grants with:
+
+```sh
+go run ./cmd/pin-annotations --catalog /private/evidence/reviewed-tools.json --reviewed-tools deploy/read-only-tools.json
+```
 
 The conservative 38-tool audit concerns published/shared data. Inline diff uses
 only disposable private scratch files. Registry refresh, persistent schema

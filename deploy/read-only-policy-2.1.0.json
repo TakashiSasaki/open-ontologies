@@ -1,0 +1,235 @@
+{
+  "tool_annotations": {
+    "*": {
+      "readOnlyHint": false
+    },
+    "borderline_partition": {
+      "input_schema_sha256": [
+        "dcbd951f242e830258f18ff76b7193b91d2f14afec0eb1637baf3de06b82216e"
+      ],
+      "readOnlyHint": true
+    },
+    "eval_rag": {
+      "input_schema_sha256": [
+        "1b2d4bed8d113a5b854129b3b18ad1951f2ace48c1a0d766fa3c5eb0a61bc789"
+      ],
+      "readOnlyHint": true
+    },
+    "eval_rag_mmrag": {
+      "input_schema_sha256": [
+        "4c8236c829690671ed92dbf8536ae391d9487a46b3ec37b17436c515eb112980"
+      ],
+      "readOnlyHint": true
+    },
+    "graph_projection_lossy_check": {
+      "input_schema_sha256": [
+        "587f81a549a99af0cdd882d6d4d7f9e782aa4f9850005a4155d84c73d3ecd88f"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_align_flora": {
+      "input_schema_sha256": [
+        "9bcf1794ea446d86c913aaa53dff73b62a5d31ee79d94d0c14633bd0e9aca22f"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_align_fuzzy": {
+      "input_schema_sha256": [
+        "6e7808952674022f8b77471c3deba7fa1192725ebfcf8927df71460ee241aafd"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_cache_list": {
+      "input_schema_sha256": [
+        "e6f295fcac4420f78390c9bea9e0a979780e8adc757417a5498477cf4c0907ea"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_cache_status": {
+      "input_schema_sha256": [
+        "0adde289e82a26487922d5ec63f71d6e104fd77a1ef8ea1aced7b1c600e4a5d2"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_classify_el": {
+      "input_schema_sha256": [
+        "efddc7bd8bbcef73a14eb1ace1ffdaec81e518ef1e13c1e9271d0b8acb694a49"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_coevolve_dependency_graph": {
+      "input_schema_sha256": [
+        "9f022fa45e7697fb3bcd170f9b349b558443b7cfce455ce8622b3b7767f25674"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_communities": {
+      "input_schema_sha256": [
+        "8c0eeb2f3541f07618d41f59cea3d9010c340d92524b701959cf2b31e5db92bd"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_cq_run": {
+      "input_schema_sha256": [
+        "89a2160269a6cb99d86c334a263736e8bd9afeceac1ed6da821207af09af965e"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_crosswalk": {
+      "input_schema_sha256": [
+        "fd223adfe6f067604fa6da3d6d8b0a74ffd760795e5193bf83479bd6fa107611"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_diff": {
+      "input_schema_sha256": [
+        "42f96319a497154d17c4da664951d7621a2d5b4905662feac90e99200e3f77ab"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_eval_alignment": {
+      "input_schema_sha256": [
+        "28da8536ace3e4e632b36da8dc66bd900586ee9eadaf8ba414d3df5e30dde33b"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_extract_scaffold": {
+      "input_schema_sha256": [
+        "4b661a5ee870cbea86fd1b63f4f59fa142e1329ea47f433bce1ad434274819db"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_extract_validate": {
+      "input_schema_sha256": [
+        "620dcbd12cf21ddff98c5503069f8697517dc1d8b8c1b5f690b9dc4c7e54dc6f"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_history": {
+      "input_schema_sha256": [
+        "efddc7bd8bbcef73a14eb1ace1ffdaec81e518ef1e13c1e9271d0b8acb694a49"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_lineage": {
+      "input_schema_sha256": [
+        "e2e9a8df8a9d71c5395c59df7e41d67331a29c0133a3d6941ec612d46e667a91"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_lint": {
+      "input_schema_sha256": [
+        "0e105907996ddaa4f0d807e77ee9f1fce90b3c4822b2f71a121f35e5cc7e7c3e"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_owl_shacl_coevolve_check": {
+      "input_schema_sha256": [
+        "eb3485cb5f8503cc01a232bd4518ae1c5ed525734b7d7d310b3d6ec65ea36795"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_owl_shacl_coevolve_incremental": {
+      "input_schema_sha256": [
+        "9e8056aa86859eb8e11bd1963f238019a91c7c47d84d39d74a5e89dbf34cbf17"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_plugin_list": {
+      "input_schema_sha256": [
+        "efddc7bd8bbcef73a14eb1ace1ffdaec81e518ef1e13c1e9271d0b8acb694a49"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_provenance": {
+      "input_schema_sha256": [
+        "9889550dc33c0a494a985926a41e9ccd0b0f6fe7b7cb613ed7591bfab0689e68"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_repo_list": {
+      "input_schema_sha256": [
+        "5bcd1ac0958913562df187fc21356ce944aa7d4133441979687dcc7942368629"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_segment_retrieve": {
+      "input_schema_sha256": [
+        "31501f9590df55fec466d0e7fee2f45a038a5c4c398d7b134b3d7893d4955a70"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_shacl_check": {
+      "input_schema_sha256": [
+        "dd78a5e956ff28bcdcd47d961783745075ba90dcb7f4149188a4922b340a6e01"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_shape_combinatorics": {
+      "input_schema_sha256": [
+        "27443728526ab2bbe71d9908e7d2f4440292e22ee8f04acfb3f5dbad219703b4"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_shape_induce": {
+      "input_schema_sha256": [
+        "50ad84d37fc1f2d2942851743199d8bf3045bb70a902bf32c87d3c514d7ba73e"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_similarity": {
+      "input_schema_sha256": [
+        "088c1b0585c2a8cc6ba9e6f21bc71cd4e59c0b00bc59aeed297be3fb4b6c387d"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_status": {
+      "input_schema_sha256": [
+        "efddc7bd8bbcef73a14eb1ace1ffdaec81e518ef1e13c1e9271d0b8acb694a49"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_support_check": {
+      "input_schema_sha256": [
+        "ff909b10a437efd01f628705cf554fd14a9687a4df2504d47585adcbcb0134fe"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_support_report": {
+      "input_schema_sha256": [
+        "9d7f64bea8a676eeefad16ac32fdeadd56b9ca7a96470f16dfb550f6cd35232a"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_temporal_conflicts": {
+      "input_schema_sha256": [
+        "efddc7bd8bbcef73a14eb1ace1ffdaec81e518ef1e13c1e9271d0b8acb694a49"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_temporal_query": {
+      "input_schema_sha256": [
+        "bbdf61576aa17ca214ddba4a7ffa5b00048af43f919ed5ea6c0428c3666fe9f5"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_temporal_snapshot": {
+      "input_schema_sha256": [
+        "8353ea71229cea4eedf0070c808217e0870c568af76f8bc068b9d79eac5eb6ae"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_validate": {
+      "input_schema_sha256": [
+        "03776be99fb868ddf03b5fe38da8dae02a1ef2f65101b8fe041a30e0b69b3161"
+      ],
+      "readOnlyHint": true
+    },
+    "onto_validate_clinical": {
+      "input_schema_sha256": [
+        "efddc7bd8bbcef73a14eb1ace1ffdaec81e518ef1e13c1e9271d0b8acb694a49"
+      ],
+      "readOnlyHint": true
+    }
+  }
+}

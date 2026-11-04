@@ -1,0 +1,94 @@
+{
+  "verified_at_utc": "2026-11-04T13:37:20Z",
+  "os": "Ubuntu 24.04.4 LTS",
+  "kernel": "6.17.0-1011-oracle",
+  "architecture": "aarch64",
+  "libc": [
+    "glibc",
+    "2.39"
+  ],
+  "system_go": "go version go1.22.2 linux/arm64",
+  "go_build_metadata": {
+    "adapter": [
+      "/usr/local/bin/open-ontologies-mcp-adapter: go1.26.10",
+      "\tpath\topen-ontologies-mcp-adapter/cmd/open-ontologies-mcp-adapter",
+      "\tmod\topen-ontologies-mcp-adapter\t(devel)\t",
+      "\tbuild\t-buildmode=exe",
+      "\tbuild\t-compiler=gc",
+      "\tbuild\t-trimpath=true",
+      "\tbuild\tDefaultGODEBUG=cryptocustomrand=1,httpservecontentmaxranges=1,tlssecpmlkem=0,urlstrictcolons=0",
+      "\tbuild\tCGO_ENABLED=0",
+      "\tbuild\tGOARCH=arm64",
+      "\tbuild\tGOOS=linux",
+      "\tbuild\tGOARM64=v8.0"
+    ],
+    "proxy": [
+      "/usr/local/bin/mcp-compat-proxy: go1.26.10",
+      "\tpath\tmcp-compat-proxy/cmd/mcp-compat-proxy",
+      "\tmod\tmcp-compat-proxy\t(devel)\t",
+      "\tdep\tgithub.com/google/jsonschema-go\tv0.4.3\th1:/DBOLZTfDow7pe2GmaJNhltueGTtDKICi8V8p+DQPd0=",
+      "\tdep\tgithub.com/modelcontextprotocol/go-sdk\tv1.8.0\th1:KIvahhYqwtbeniWVPs3TcXEA7b8jEtwfBpOTAI+Urx4=",
+      "\tdep\tgithub.com/segmentio/asm\tv1.1.3\th1:WM03sfUOENvvKexOLp+pCqgb/WDjsi7EK8gIsICtzhc=",
+      "\tdep\tgithub.com/segmentio/encoding\tv0.5.4\th1:OW1VRern8Nw6ITAtwSZ7Idrl3MXCFwXHPgqESYfvNt0=",
+      "\tdep\tgithub.com/yosida95/uritemplate/v3\tv3.0.2\th1:Ed3Oyj9yrmi9087+NczuL5BwkIc4wvTb5zIM+UJPGz4=",
+      "\tdep\tgolang.org/x/oauth2\tv0.35.0\th1:Mv2mzuHuZuY2+bkyWXIHMfhNdJAdwW3FuWeCPYN5GVQ=",
+      "\tdep\tgolang.org/x/sync\tv0.20.0\th1:e0PTpb7pjO8GAtTs2dQ6jYa5BWYlMuX047Dco/pItO4=",
+      "\tdep\tgolang.org/x/sys\tv0.41.0\th1:Ivj+2Cp/ylzLiEU89QhWblYnOE9zerudt9Ftecq2C6k=",
+      "\tdep\tgolang.org/x/time\tv0.15.0\th1:bbrp8t3bGUeFOx08pvsMYRTCVSMk89u4tKbNOZbp88U=",
+      "\tbuild\t-buildmode=exe",
+      "\tbuild\t-compiler=gc",
+      "\tbuild\t-trimpath=true",
+      "\tbuild\tDefaultGODEBUG=cryptocustomrand=1,httpservecontentmaxranges=1,tlssecpmlkem=0,urlstrictcolons=0",
+      "\tbuild\tCGO_ENABLED=0",
+      "\tbuild\tGOARCH=arm64",
+      "\tbuild\tGOOS=linux",
+      "\tbuild\tGOARM64=v8.0"
+    ]
+  },
+  "native_upstream_version": "2.1.0",
+  "native_upstream_commit": "cefe5997d04553ac495873e8aa1046c1d6b85f7d",
+  "image_id": "sha256:03a728dd19b91c70e07ccc3ff0880bc99fe98271406152e3aa2eda7898884d02",
+  "adapter_commit": "709279627c2ee9090b6ddc25500713ee0677fe1b",
+  "proxy_commit": "4d7674855d9564c5cc6a9a77b0a7258c19f61322",
+  "binary_sha256": {
+    "adapter": "a72797c4a9246777663d7e0e4701c0c8e8106fb68319a85a97f0e148b3284116",
+    "proxy": "dbaa7846e777e3be7f4d9a1213d6f8d1288cdd5c7200f2c197b550362035ffbd",
+    "upstream_worker": "b020778664f034929423775d5f99d30745500cc674b430229c4ba4d5eddf9102"
+  },
+  "mcp_frontend": "2026-07-28",
+  "mcp_backend": "2025-06-18",
+  "mcp_go_sdk": "1.8.0",
+  "rmcp": "1.4.0",
+  "tunnel_client": "0.0.19+01d67bb4da0d8359b808b4761f8db171ab682cd7",
+  "tool_count": 124,
+  "read_only_true": 38,
+  "read_only_false": 86,
+  "profiles": {
+    "authoring": {
+      "tools": 39,
+      "read_only": 9
+    },
+    "data": {
+      "tools": 23,
+      "read_only": 5
+    },
+    "reasoning": {
+      "tools": 27,
+      "read_only": 5
+    },
+    "validation": {
+      "tools": 27,
+      "read_only": 12
+    }
+  },
+  "verification_boundary": "Isolated QA writes, production read-only/request-private integration, public HTTPS, live cloud connected-app status and private DL call. Fresh Gemini/ChatGPT UI refresh not observed.",
+  "worker_host_libraries": {
+    "/usr/lib/aarch64-linux-gnu/libssl.so.3": "cd89f6e6eea72583e1f1f98f8ea6b0f5e9281d7a0e4262a2e36f648be789d565",
+    "/usr/lib/aarch64-linux-gnu/libcrypto.so.3": "b27a2396652ee28629c94d59d667c417dbffdf2dee84e5bf140bd17d3eedb7d9",
+    "/usr/lib/aarch64-linux-gnu/libstdc++.so.6.0.33": "6e3112d35cfc86db7ee85b27e1746f67408e2837ff8628b46386c3eabd5682a4",
+    "/usr/lib/aarch64-linux-gnu/libgcc_s.so.1": "f2d3ad2bf0b61f6bc944cc37d7b6ab7f88d2582b41ff989ca164803f56cc5f20",
+    "/usr/lib/aarch64-linux-gnu/libm.so.6": "5e0391562de36de323fb9cb0f2c1b6bd6d034c840b1dac018499f5fe4ded1b4a",
+    "/usr/lib/aarch64-linux-gnu/libc.so.6": "0f1905dc27dbc6715875c70527bc8da846a10084c9c483e9d8ff76dce8d69d0e",
+    "/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1": "390027e5f45f236bd1838bc54bf464c5ff01d260ab9f8b415ea8276641bce505"
+  }
+}
