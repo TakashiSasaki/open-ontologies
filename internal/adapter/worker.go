@@ -37,7 +37,7 @@ func startWorker(ctx context.Context, binary, root, version string) (_ *worker, 
 			w.close()
 		}
 	}()
-	w.cmd = exec.CommandContext(ctx, binary, "serve", "--data-dir", filepath.Join(dir, "state"), "--storage-mode", "memory", "--config", filepath.Join(dir, "absent.toml"), "--tools-allow", workerTools)
+	w.cmd = exec.CommandContext(ctx, binary, "serve", "--no-connect", "--data-dir", filepath.Join(dir, "state"), "--storage-mode", "memory", "--config", filepath.Join(dir, "absent.toml"), "--tools-allow", workerTools)
 	w.cmd.Dir = dir
 	// Do not pass credentials, persistent HOME, checker/model overrides or the
 	// host's storage configuration into an isolated analysis process.
