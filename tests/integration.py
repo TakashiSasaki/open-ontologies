@@ -70,6 +70,7 @@ def run(args):
         old='<https://example.org/A> a <https://example.org/C> .'
         new=old+'\n<https://example.org/A> <https://example.org/p> 1 .'
         p=call(c,'onto_diff',{'old_content':old,'new_content':new});assert p['added']==1 and p['removed']==0
+        p=call(c,'onto_diff',{'old_path':None,'new_path':None,'old_content':old,'new_content':new});assert p['added']==1 and p['removed']==0
         p=call(c,'onto_diff',{'old_content':'[] a <urn:C> .','new_content':'[] a <urn:C> .'});assert p['added']==0 and p['removed']==0
         checks.append('inline_diff_and_blank_nodes')
         errors=[('onto_ingest',{'inline_data':'[]'}),('onto_ingest',{'inline_data':'[broken','format':'json','dry_run':True}),('onto_ingest',{'path':'/data/data.json','inline_data':'[]','format':'json'}),('onto_ingest',{'inline_data':'binary','format':'xlsx'}),('onto_diff',{'old_content':'<#relative> a <urn:C> .','new_content':old}),('onto_diff',{'old_path':'/data/a.ttl','old_content':old,'new_content':new}),('onto_reason',{'ontology_turtle':ONTOLOGY,'certificate_dir':'/data/not-created'}),('onto_justify',{'ontology_turtle':ONTOLOGY,'certificate_dir':'/data/not-created'}),('onto_defects',{'ontology_turtle':'x'*(1024*1024+1)})]

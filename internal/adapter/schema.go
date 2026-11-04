@@ -87,6 +87,8 @@ func overlayCatalog(raw json.RawMessage) (json.RawMessage, error) {
 			properties["path"] = stringField("Server-side file path. Supply path OR inline_data. Dry-run server paths must be inside configured readable data roots.")
 			removeRequired("path")
 		case "onto_diff":
+			properties["old_path"] = stringField("Old server-side RDF file. Supply old_path OR old_content.")
+			properties["new_path"] = stringField("New server-side RDF file. Supply new_path OR new_content.")
 			properties["old_content"] = stringField("Inline old Turtle, at most 1 MiB. Supply old_path OR old_content. Relative IRIs require an explicit @base.")
 			properties["new_content"] = stringField("Inline new Turtle, at most 1 MiB. Supply new_path OR new_content. Relative IRIs require an explicit @base.")
 			removeRequired("old_path", "new_path")
