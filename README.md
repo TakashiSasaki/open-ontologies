@@ -60,6 +60,9 @@ bounded tableau trace, change resource-budget verdict semantics, or invent a
 proof when upstream returns `trace: []` / `explanation: []`. Original responses
 retain these limitations. Private graphs do not change OWL/SHACL coverage.
 
+The native-only changes are preserved as [upstream patch candidates](patches/open-ontologies/README.md),
+with their exact base, regression tests and apply/verification instructions.
+
 ## Build and run
 
 Go 1.25+ (preferred toolchain 1.26.10), Git, and an unmodified Linux executable

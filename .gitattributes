@@ -1,0 +1,3 @@
+# Stored unified diffs contain intentional single-space context lines. Their
+# actual added source is checked with git apply --whitespace=error-all.
+patches/open-ontologies/*.patch -whitespace
