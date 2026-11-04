@@ -12,6 +12,7 @@ import importlib.util
 import json
 from pathlib import Path
 import datetime
+import uuid
 
 ONTOLOGY = '''@prefix ex: <https://example.org/adapter-test#> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
@@ -85,13 +86,14 @@ def run(args):
         after=call(c,'onto_status',{});assert before['triples_loaded']==after['triples_loaded']
         if args.allow_qa_writes:
             data='[{"id":1,"name":"Ada"}]'
-            p=call(c,'onto_ingest',{'inline_data':data,'format':'json','base_iri':'https://example.org/adapter-written/','provenance':True})
+            namespace='https://example.org/adapter-written/'+uuid.uuid4().hex+'/'
+            p=call(c,'onto_ingest',{'inline_data':data,'format':'json','base_iri':namespace,'provenance':True})
             assert p['triples_loaded']>0 and p['provenance_triples']>0
-            source='https://example.org/adapter-written/source/inline-'+hashlib.sha256(data.encode()).hexdigest()
+            source=namespace+'source/inline-'+hashlib.sha256(data.encode()).hexdigest()
             q=call(c,'onto_query',{'query':'SELECT ?label WHERE { <'+source+'> <http://www.w3.org/2000/01/rdf-schema#label> ?label }'})
             assert q['results'] and 'request-' not in json.dumps(q)
             p=call(c,'onto_ingest',{'path':'/data/data.json','dry_run':True});assert p['triples_loaded']==0
-            p=call(c,'onto_ingest',{'path':'/data/data.json','base_iri':'https://example.org/file-written/'});assert p['triples_loaded']>0
+            p=call(c,'onto_ingest',{'path':'/data/data.json','base_iri':namespace+'file/'});assert p['triples_loaded']>0
             p=call(c,'onto_diff',{'old_path':'/data/a.ttl','new_path':'/data/b.ttl'});assert p['added']==1
             for params in [{'old_path':'/data/a.ttl','new_content':'<https://example.org/A> a <https://example.org/Class> ; <https://example.org/p> 1 .'}, {'old_content':'<https://example.org/A> a <https://example.org/Class> .','new_path':'/data/b.ttl'}]:
                 p=call(c,'onto_diff',params);assert p['added']==1 and p['removed']==0
