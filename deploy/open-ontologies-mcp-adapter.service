@@ -1,0 +1,39 @@
+[Unit]
+Description=Open Ontologies MCP interface adapter
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+# Use the same numeric UID that can read the backend data mount.
+User=ubuntu
+Group=ubuntu
+ExecStart=/usr/local/bin/open-ontologies-mcp-adapter --listen 127.0.0.1:18084 --config /etc/open-ontologies-mcp-adapter.json
+Restart=always
+RestartSec=5
+RuntimeDirectory=open-ontologies-mcp-adapter
+RuntimeDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+# Replace the source path with the deployment's existing persistent data mount.
+BindReadOnlyPaths=/srv/open-ontologies/data:/var/lib/open-ontologies-mcp-adapter/backend-data
+ReadWritePaths=/run/open-ontologies-mcp-adapter
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryMax=2G
+CPUQuota=200%
+TasksMax=64
+KillMode=control-group
+TimeoutStopSec=25
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

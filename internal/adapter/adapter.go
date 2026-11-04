@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -22,6 +23,7 @@ type Config struct {
 	BackendURL      string            `json:"backend_url"`
 	WorkerBinary    string            `json:"worker_binary"`
 	WorkerSHA256    string            `json:"worker_sha256"`
+	UpstreamVersion string            `json:"upstream_version"`
 	WorkRoot        string            `json:"work_root"`
 	ServerDataRoots map[string]string `json:"server_data_roots,omitempty"`
 	MaxWorkers      int               `json:"max_workers,omitempty"`
@@ -44,6 +46,9 @@ func New(cfg Config, version string) (*Adapter, error) {
 	}
 	if !filepath.IsAbs(cfg.WorkerBinary) || !filepath.IsAbs(cfg.WorkRoot) {
 		return nil, errors.New("worker binary and work root must be absolute")
+	}
+	if cfg.UpstreamVersion == "" {
+		return nil, errors.New("upstream_version must pin the expected engine version")
 	}
 	if cfg.MaxWorkers == 0 {
 		cfg.MaxWorkers = 2
@@ -113,7 +118,19 @@ func (a *Adapter) serveMCP(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	switch m.Method {
 	case "tools/list":
-		result, err := a.native(ctx, r.Header, "tools/list", json.RawMessage(m.Params))
+		status, err := a.nativeTool(ctx, r.Header, "onto_status", object{})
+		if err == nil {
+			var info object
+			info, err = payload(status)
+			if err == nil && str(info, "version") != a.cfg.UpstreamVersion {
+				slog.Error("upstream version mismatch", "expected", a.cfg.UpstreamVersion, "observed", str(info, "version"))
+				err = errors.New("upstream version mismatch; update and verify backend/worker together")
+			}
+		}
+		var result json.RawMessage
+		if err == nil {
+			result, err = a.native(ctx, r.Header, "tools/list", json.RawMessage(m.Params))
+		}
 		if err == nil {
 			result, err = overlayCatalog(result)
 		}
@@ -139,10 +156,12 @@ func (a *Adapter) serveMCP(w http.ResponseWriter, r *http.Request) {
 			a.proxy.ServeHTTP(w, r)
 			return
 		}
+		started := time.Now()
 		result, err := a.adapt(ctx, r.Header, params.Name, args)
 		if err != nil {
 			result = errorTool(err)
 		}
+		slog.Info("adapted MCP call", "tool", params.Name, "duration_ms", time.Since(started).Milliseconds(), "adapter_error", err != nil, "result_bytes", len(result))
 		a.respond(w, m.ID, result)
 	default:
 		a.proxy.ServeHTTP(w, r)
@@ -169,11 +188,18 @@ func (a *Adapter) withWorker(ctx context.Context, fn func(*worker) (json.RawMess
 	case <-ctx.Done():
 		return nil, errors.New("private worker capacity/deadline exceeded; shared store was not touched")
 	}
-	w, e := startWorker(ctx, a.cfg.WorkerBinary, a.cfg.WorkRoot)
+	w, e := startWorker(ctx, a.cfg.WorkerBinary, a.cfg.WorkRoot, a.Version)
 	if e != nil {
 		return nil, e
 	}
 	defer w.close()
+	status, e := w.checked("onto_status", object{})
+	if e != nil {
+		return nil, e
+	}
+	if str(status, "version") != a.cfg.UpstreamVersion {
+		return nil, errors.New("private worker engine version mismatch")
+	}
 	return fn(w)
 }
 func (a *Adapter) adapt(ctx context.Context, h http.Header, name string, args object) (json.RawMessage, error) {

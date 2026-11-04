@@ -3,11 +3,16 @@ package adapter
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestClassIRINormalization(t *testing.T) {
@@ -89,5 +94,55 @@ func TestWorkerIdentityMustMatchPinnedExecutable(t *testing.T) {
 	_ = os.WriteFile(file, []byte("different binary"), 0o700)
 	if e := checkWorkerHash(file, strings.Repeat("0", 64)); e == nil {
 		t.Fatal("worker hash mismatch accepted")
+	}
+}
+
+func TestUpgradeCannotMixOldPrivateWorkerWithNewBackend(t *testing.T) {
+	calls := 0
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var request message
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(message{Version: "2.0", ID: request.ID, Result: jsonTool(object{"version": marshal("2.2.0")})})
+	}))
+	defer backend.Close()
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "worker")
+	data := []byte("pinned but never executed")
+	_ = os.WriteFile(binary, data, 0o700)
+	hash := sha256.Sum256(data)
+	a, e := New(Config{BackendURL: backend.URL + "/mcp", WorkerBinary: binary, WorkerSHA256: hex.EncodeToString(hash[:]), UpstreamVersion: "2.1.0", WorkRoot: filepath.Join(dir, "requests")}, "test")
+	if e != nil {
+		t.Fatal(e)
+	}
+	req := httptest.NewRequest("POST", "http://localhost/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))
+	req.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	a.Handler().ServeHTTP(response, req)
+	if response.Code != 502 || calls != 1 {
+		t.Fatal("version mismatch was not rejected before catalog import", response.Code, calls)
+	}
+}
+
+func TestWorkerDeadlineRemovesWorkspaceAndStopsProcess(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "blocked-worker")
+	_ = os.WriteFile(binary, []byte("#!/bin/sh\nsleep 30\n"), 0o700)
+	root := filepath.Join(dir, "requests")
+	_ = os.Mkdir(root, 0o700)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	w, e := startWorker(ctx, binary, root, "test")
+	if w != nil {
+		w.close()
+	}
+	if e == nil {
+		t.Fatal("blocked worker ignored deadline")
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 0 || time.Since(started) > 5*time.Second {
+		t.Fatal("private process/workspace was not cleaned", err, len(entries), time.Since(started))
 	}
 }

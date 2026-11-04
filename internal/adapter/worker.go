@@ -26,7 +26,7 @@ type worker struct {
 	sequence uint64
 }
 
-func startWorker(ctx context.Context, binary, root string) (_ *worker, err error) {
+func startWorker(ctx context.Context, binary, root, version string) (_ *worker, err error) {
 	dir, err := os.MkdirTemp(root, "request-")
 	if err != nil {
 		return nil, err
@@ -64,7 +64,7 @@ func startWorker(ctx context.Context, binary, root string) (_ *worker, err error
 	if err = w.cmd.Start(); err != nil {
 		return nil, errors.New("cannot start upstream worker")
 	}
-	_, err = w.rpc("initialize", map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{}, "clientInfo": map[string]any{"name": "open-ontologies-mcp-adapter", "version": "0.1.0"}})
+	_, err = w.rpc("initialize", map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{}, "clientInfo": map[string]any{"name": "open-ontologies-mcp-adapter", "version": version}})
 	if err != nil {
 		return nil, err
 	}

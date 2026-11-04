@@ -75,6 +75,7 @@ Example configuration (replace the hash with the executable's actual SHA-256):
   "backend_url": "http://127.0.0.1:18080/mcp",
   "worker_binary": "/usr/local/libexec/open-ontologies-upstream",
   "worker_sha256": "<64 lowercase hexadecimal digits>",
+  "upstream_version": "2.1.0",
   "work_root": "/run/open-ontologies-mcp-adapter/requests",
   "server_data_roots": {"/data": "/var/lib/open-ontologies-mcp-adapter/backend-data"},
   "max_workers": 2,
@@ -105,3 +106,9 @@ backend/worker together after a data backup. Removed profile tool names fail
 generic-proxy startup and require review. No automatic image upgrade or automatic
 reapproval of read-only grants is performed. Verification and immutable hashes
 go in `docs/compatibility/`; requests/credentials/data/logs stay outside Git.
+
+The adapter refuses catalog import when the backend's `onto_status` version
+differs from `upstream_version`, and checks that each worker reports that same
+engine version. This prevents silently mixing an upgraded backend with an old
+private engine; a compatible upstream update needs configuration/worker refresh,
+not a patch/rebuild of the Rust source.
