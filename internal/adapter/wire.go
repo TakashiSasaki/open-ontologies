@@ -49,32 +49,32 @@ type message struct {
 
 func responseMessage(body io.Reader, contentType string, expected json.RawMessage) (message, error) {
 	var result message
-	r := io.LimitReader(body, maxResponse+1)
+	r := &io.LimitedReader{R: body, N: maxResponse + 1}
 	check := func(data []byte) (bool, error) {
 		if err := json.Unmarshal(data, &result); err != nil {
-			return false, err
+			return false, observe(codeBackendProtocol, stageBackendRead, err)
 		}
 		if result.Version != "2.0" {
-			return false, errors.New("invalid backend JSON-RPC version")
+			return false, observe(codeBackendProtocol, stageBackendRead, errors.New("invalid backend JSON-RPC version"))
 		}
 		return bytes.Equal(bytes.TrimSpace(result.ID), expected), nil
 	}
 	if strings.HasPrefix(contentType, "application/json") {
 		data, err := io.ReadAll(r)
 		if err != nil {
-			return result, err
+			return result, observe(codeBackendRead, stageBackendRead, err)
 		}
 		if len(data) > maxResponse {
-			return result, errors.New("backend response exceeds limit")
+			return result, observe(codeBackendLimit, stageBackendRead, errors.New("backend response exceeds limit"))
 		}
 		matched, err := check(data)
 		if err == nil && !matched {
-			err = errors.New("unrelated backend response")
+			err = observe(codeBackendProtocol, stageBackendRead, errors.New("unrelated backend response"))
 		}
 		return result, err
 	}
 	if !strings.HasPrefix(contentType, "text/event-stream") {
-		return result, errors.New("unsupported backend response")
+		return result, observe(codeBackendProtocol, stageBackendRead, errors.New("unsupported backend response"))
 	}
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 4096), maxResponse)
@@ -99,9 +99,17 @@ func responseMessage(body io.Reader, contentType string, expected json.RawMessag
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return result, err
+		code := codeBackendRead
+		if errors.Is(err, bufio.ErrTooLong) || r.N == 0 {
+			code = codeBackendLimit
+		}
+		return result, observe(code, stageBackendRead, err)
 	}
-	return result, errors.New("backend ended without matching result")
+	code := codeBackendRead
+	if r.N == 0 {
+		code = codeBackendLimit
+	}
+	return result, observe(code, stageBackendRead, errors.New("backend ended without matching result"))
 }
 
 func (a *Adapter) native(ctx context.Context, headers http.Header, method string, params any) (json.RawMessage, error) {

@@ -29,7 +29,7 @@ type worker struct {
 func startWorker(ctx context.Context, binary, root, version string) (_ *worker, err error) {
 	dir, err := os.MkdirTemp(root, "request-")
 	if err != nil {
-		return nil, err
+		return nil, observe(codeScratch, stageWorkspace, err)
 	}
 	w := &worker{dir: dir}
 	defer func() {
@@ -53,16 +53,16 @@ func startWorker(ctx context.Context, binary, root, version string) (_ *worker, 
 	}
 	w.stdin, err = w.cmd.StdinPipe()
 	if err != nil {
-		return nil, err
+		return nil, observe(codeIO, stageStart, err)
 	}
 	stdout, e := w.cmd.StdoutPipe()
 	if e != nil {
-		return nil, e
+		return nil, observe(codeIO, stageStart, e)
 	}
 	w.out = bufio.NewScanner(stdout)
 	w.out.Buffer(make([]byte, 4096), maxResponse)
 	if err = w.cmd.Start(); err != nil {
-		return nil, errors.New("cannot start upstream worker")
+		return nil, observe(codeStart, stageStart, errors.New("cannot start upstream worker"))
 	}
 	_, err = w.rpc("initialize", map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{}, "clientInfo": map[string]any{"name": "open-ontologies-mcp-adapter", "version": version}})
 	if err != nil {
@@ -70,7 +70,7 @@ func startWorker(ctx context.Context, binary, root, version string) (_ *worker, 
 	}
 	_, err = fmt.Fprintln(w.stdin, string(marshal(message{Version: "2.0", Method: "notifications/initialized", Params: marshal(object{})})))
 	if err != nil {
-		return nil, err
+		return nil, observe(codeIO, stageSend, err)
 	}
 	return w, nil
 }
@@ -78,22 +78,26 @@ func (w *worker) rpc(method string, params any) (json.RawMessage, error) {
 	w.sequence++
 	id := marshal(w.sequence)
 	if _, err := fmt.Fprintln(w.stdin, string(marshal(message{Version: "2.0", ID: id, Method: method, Params: marshal(params)}))); err != nil {
-		return nil, errors.New("worker input closed")
+		return nil, observe(codeIO, stageSend, errors.New("worker input closed"))
 	}
 	for w.out.Scan() {
 		var m message
 		if err := json.Unmarshal(w.out.Bytes(), &m); err != nil {
-			return nil, errors.New("invalid worker JSON")
+			return nil, observe(codeProtocol, stageRead, errors.New("invalid worker JSON"))
 		}
 		if string(m.ID) != string(id) {
 			continue
 		}
 		if len(m.Error) > 0 {
-			return nil, errors.New("upstream worker rejected MCP request")
+			return nil, observe(codeRPC, stageRPC, errors.New("upstream worker rejected MCP request"))
 		}
 		return m.Result, nil
 	}
-	return nil, errors.New("upstream worker stopped or exceeded request deadline/output limit")
+	code := codeExit
+	if w.out.Err() != nil {
+		code = codeOutput
+	}
+	return nil, observe(code, stageRead, errors.New("upstream worker stopped or exceeded request deadline/output limit"))
 }
 func (w *worker) call(name string, args object) (json.RawMessage, error) {
 	return w.rpc("tools/call", map[string]any{"name": name, "arguments": args})

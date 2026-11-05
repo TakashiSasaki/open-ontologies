@@ -51,7 +51,7 @@ func TestNativeErrorsAndNegativeFindingsRemainDistinct(t *testing.T) {
 func TestTransparentHTTPFailuresAndProtocolErrors(t *testing.T) {
 	for _, status := range []int{400, 404, 429, 503} {
 		r := &http.Response{StatusCode: status, Body: ioBody([]byte("original session failure")), Request: httptest.NewRequest("POST", "http://localhost/mcp", nil)}
-		r.Request = r.Request.WithContext(context.WithValue(r.Request.Context(), callKey{}, callInfo{"onto_query", nil, marshal(1)}))
+		r.Request = r.Request.WithContext(context.WithValue(r.Request.Context(), callKey{}, callInfo{name: "onto_query", id: marshal(1)}))
 		a := &Adapter{}
 		if e := a.modifyResponse(r); e != nil {
 			t.Fatal(e)
@@ -62,7 +62,7 @@ func TestTransparentHTTPFailuresAndProtocolErrors(t *testing.T) {
 		}
 	}
 	r := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: ioBody([]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"invalid params"}}`)), Request: httptest.NewRequest("POST", "http://localhost/mcp", nil)}
-	r.Request = r.Request.WithContext(context.WithValue(r.Request.Context(), callKey{}, callInfo{"onto_query", nil, marshal(1)}))
+	r.Request = r.Request.WithContext(context.WithValue(r.Request.Context(), callKey{}, callInfo{name: "onto_query", id: marshal(1)}))
 	if e := (&Adapter{}).modifyResponse(r); e != nil {
 		t.Fatal(e)
 	}

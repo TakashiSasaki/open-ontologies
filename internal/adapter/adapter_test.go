@@ -2,6 +2,7 @@
 package adapter
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -140,6 +141,12 @@ func TestWorkerDeadlineRemovesWorkspaceAndStopsProcess(t *testing.T) {
 	}
 	if e == nil {
 		t.Fatal("blocked worker ignored deadline")
+	}
+	var buffer bytes.Buffer
+	a := diagnosticAdapter(&buffer)
+	a.logAdaptedCall(ctx, "onto_convert", object{}, started, errorTool(e), errorTool(e), e)
+	if str(logObject(t, &buffer), "error_code") != string(codeDeadline) {
+		t.Fatal("worker deadline was not classified", buffer.String())
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil || len(entries) != 0 || time.Since(started) > 5*time.Second {

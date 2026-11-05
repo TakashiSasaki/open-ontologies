@@ -18,51 +18,55 @@ var sourceExtensions = map[string]string{
 
 func (a *Adapter) convert(ctx context.Context, args object) (json.RawMessage, error) {
 	if !supplied(args, "inline_content") || supplied(args, "path") {
-		return nil, errors.New("provide exactly one of path and inline_content; from is only for inline content")
+		return nil, observe(codeArguments, stageArguments, errors.New("provide exactly one of path and inline_content; from is only for inline content"))
 	}
 	if supplied(args, "output") {
-		return nil, errors.New("inline conversion returns content directly and does not accept output paths")
+		return nil, observe(codeArguments, stageArguments, errors.New("inline conversion returns content directly and does not accept output paths"))
 	}
 	var content string
 	if json.Unmarshal(args["inline_content"], &content) != nil {
-		return nil, errors.New("inline_content must be a string")
+		return nil, observe(codeArguments, stageArguments, errors.New("inline_content must be a string"))
 	}
 	if len(content) > maxInline {
-		return nil, errors.New("inline_content exceeds 1 MiB")
+		return nil, observe(codeInputSize, stageArguments, errors.New("inline_content exceeds 1 MiB"))
 	}
 	format := strings.ToLower(str(args, "from"))
 	ext, ok := sourceExtensions[format]
 	if !ok {
-		return nil, errors.New("from is required for inline conversion: turtle, ntriples, rdfxml, nquads, trig, jsonld or ofn")
+		return nil, observe(codeArguments, stageArguments, errors.New("from is required for inline conversion: turtle, ntriples, rdfxml, nquads, trig, jsonld or ofn"))
 	}
 	if strings.TrimSpace(str(args, "to")) == "" {
-		return nil, errors.New("to is required")
+		return nil, observe(codeArguments, stageArguments, errors.New("to is required"))
 	}
 	return a.withWorker(ctx, func(w *worker) (json.RawMessage, error) {
 		file := filepath.Join(w.dir, "input."+ext)
 		if e := os.WriteFile(file, []byte(content), 0o600); e != nil {
-			return nil, errors.New("cannot stage inline conversion input")
+			return nil, observe(codeScratch, stageStage, errors.New("cannot stage inline conversion input"))
 		}
-		call := func(to string) (string, error) {
+		call := func(to string, stage errorStage) (string, error) {
 			raw, e := w.call("onto_convert", object{"path": marshal(file), "to": marshal(to)})
 			if e != nil {
 				return "", e
 			}
 			text, e := textContent(raw)
 			if e != nil {
-				return "", e
+				code := codeNativeResult
+				if resultFailure(raw) != nil {
+					code = codeNative
+				}
+				return "", observe(code, stage, e)
 			}
 			var problem object
 			if json.Unmarshal([]byte(text), &problem) == nil && supplied(problem, "error") {
 				// Scratch paths are implementation details even on parse failures.
-				return "", errors.New(strings.ReplaceAll(str(problem, "error"), w.dir, "[inline input]"))
+				return "", observe(codeNative, stage, errors.New(strings.ReplaceAll(str(problem, "error"), w.dir, "[inline input]")))
 			}
 			return text, nil
 		}
 		// Inspect the parsed dataset, not the source text: this catches relative
 		// RDF/XML/JSON-LD/Turtle bases, datatype IRIs and graph names without
 		// mistaking a literal containing "file:" for an IRI. Do not rewrite IDs.
-		nquads, e := call("nquads")
+		nquads, e := call("nquads", stageParse)
 		if e != nil {
 			return nil, e
 		}
@@ -72,14 +76,14 @@ func (a *Adapter) convert(ctx context.Context, args object) (json.RawMessage, er
 		to := str(args, "to")
 		text := nquads
 		if to != "nquads" && to != "nq" {
-			text, e = call(to)
+			text, e = call(to, stageRender)
 			if e != nil {
 				return nil, e
 			}
 		}
 		p, e := conversionPayload(to, text)
 		if e != nil {
-			return nil, e
+			return nil, observe(codeNativeResult, stageRender, e)
 		}
 		// OFN's original constructs_not_exported and round-trip diagnostics stay
 		// in the result; a successful conversion is not a losslessness claim.
@@ -106,11 +110,11 @@ func conversionPayload(to, text string) (object, error) {
 func checkInlineIRIs(nquads string) error {
 	terms, e := tokens(nquads)
 	if e != nil {
-		return errors.New("cannot inspect converted RDF terms")
+		return observe(codeNativeResult, stageIRIs, errors.New("cannot inspect converted RDF terms"))
 	}
 	for _, token := range terms {
 		if token.kind == "iri" && strings.HasPrefix(strings.ToLower(token.text), "<file:") {
-			return errors.New("inline conversion does not accept file IRIs; use absolute non-file IRIs or an explicit @base, xml:base or JSON-LD @base; use path mode for intentional file IRIs")
+			return observe(codeFileIRI, stageIRIs, errors.New("inline conversion does not accept file IRIs; use absolute non-file IRIs or an explicit @base, xml:base or JSON-LD @base; use path mode for intentional file IRIs"))
 		}
 	}
 	return nil

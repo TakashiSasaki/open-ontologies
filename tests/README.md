@@ -69,3 +69,36 @@ and ordinary file-mode base semantics. It refuses this host's production ports.
 Never run QA-write cases against a live user's store. Omit the switch and both
 directory flags for production read-only checks. `--legacy` targets the adapter
 directly; the default targets the modern generic proxy.
+
+## Diagnostic log acceptance
+
+`diagnostics.py probe <modern-mcp-url> --output <private-file>` exercises rejected
+arguments, size limits, malformed input, unsupported output and file-IRI checks,
+plus a successful conversion and a legitimate SHACL negative finding. It never
+loads/clears the shared store and verifies the full selected RDF before/after.
+It writes expected error-text hashes rather than raw errors. Capture the relevant
+adapter journal as JSON lines, then run:
+
+```sh
+python3 tests/diagnostics.py check --journal /private/adapter-journal.jsonl \
+  --expected /private/probes.json --output /private/log-acceptance.json
+```
+
+The check matches error hashes to their real code/stage, verifies unique failure
+references, observes non-error negative findings, and rejects the synthetic secret
+marker anywhere in captured logs. Unit race tests additionally cover unwrapping,
+unchanged HTTP/MCP error content, worker protocol/exit/start/output-limit/capacity
+failures, real process deadline cleanup and concurrent logging. Tests use dummy
+markers, not actual credentials or user ontology content.
+
+For a store whose full RDF exceeds the MCP output cap, add
+`--snapshot-api http://127.0.0.1:18080/api/query` to `probe`; this uses a bounded
+128 MiB loopback administrative read for full-content comparison, without raising
+the public MCP cap. The ordinary QA store can use the default MCP snapshot.
+
+After completing read-only QA probes, `large-probe` can load an 11 MiB literal
+from a new QA file and verify the unchanged 502 response from the adapter. It
+requires `--allow-qa-writes`, a disposable native/adapter pair and its mounted
+`--data-dir`, and refuses the live ports. Capture that adapter's journal and use
+`check --require-backend-limit` to assert the real `backend_output_limit` record.
+Do not use this mutating large fixture against production.

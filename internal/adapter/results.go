@@ -6,13 +6,25 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 )
 
 type callKey struct{}
 type callInfo struct {
-	name string
-	args object
-	id   json.RawMessage
+	name    string
+	args    object
+	id      json.RawMessage
+	started time.Time
+}
+
+func (a *Adapter) proxyFailure(w http.ResponseWriter, r *http.Request, err error) {
+	if c, ok := r.Context().Value(callKey{}).(callInfo); ok {
+		err = observe(codeBackendTransport, stageBackendRoundTrip, err)
+		a.logDiagnosticCall("MCP upstream response failed", r.Context(), c.name, c.args, c.started, nil, nil, err)
+	}
+	// Keep the existing HTTP response contract, including ambiguous mutation
+	// outcomes. Logging must never cause a request replay or raise response caps.
+	http.Error(w, "upstream connection failed", http.StatusBadGateway)
 }
 
 // Keep HTTP session failures and JSON-RPC errors intact. Only successful

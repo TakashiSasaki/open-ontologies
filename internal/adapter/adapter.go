@@ -39,6 +39,7 @@ type Adapter struct {
 	slots    chan struct{}
 	sequence atomic.Uint64
 	instance string
+	logger   *slog.Logger
 	Version  string
 }
 
@@ -84,15 +85,13 @@ func New(cfg Config, version string) (*Adapter, error) {
 	direct := p.Director
 	p.Director = func(r *http.Request) { direct(r); r.Host = u.Host }
 	p.Transport = http.DefaultTransport.(*http.Transport).Clone()
-	p.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		http.Error(w, "upstream connection failed", http.StatusBadGateway)
-	}
 	var nonce [16]byte
 	if _, e := rand.Read(nonce[:]); e != nil {
 		return nil, e
 	}
 	a := &Adapter{cfg: cfg, client: client, proxy: p, slots: make(chan struct{}, cfg.MaxWorkers), instance: hex.EncodeToString(nonce[:]), Version: version}
 	p.ModifyResponse = a.modifyResponse
+	p.ErrorHandler = a.proxyFailure
 	return a, nil
 }
 
@@ -160,18 +159,19 @@ func (a *Adapter) serveMCP(w http.ResponseWriter, r *http.Request) {
 		if args == nil {
 			args = object{}
 		}
+		started := time.Now()
 		if !needsAdaptation(params.Name, args) {
-			r = r.WithContext(context.WithValue(r.Context(), callKey{}, callInfo{params.Name, args, m.ID}))
+			r = r.WithContext(context.WithValue(r.Context(), callKey{}, callInfo{name: params.Name, args: args, id: m.ID, started: started}))
 			a.proxy.ServeHTTP(w, r)
 			return
 		}
-		started := time.Now()
 		result, err := a.adapt(ctx, r.Header, params.Name, args)
 		if err != nil {
 			result = errorTool(err)
 		}
+		original := result
 		result = a.decorate(params.Name, args, result)
-		slog.Info("adapted MCP call", "tool", params.Name, "duration_ms", time.Since(started).Milliseconds(), "adapter_error", err != nil, "result_bytes", len(result))
+		a.logAdaptedCall(ctx, params.Name, args, started, result, original, err)
 		a.respond(w, m.ID, result)
 	default:
 		a.proxy.ServeHTTP(w, r)
@@ -196,7 +196,7 @@ func (a *Adapter) withWorker(ctx context.Context, fn func(*worker) (json.RawMess
 	case a.slots <- struct{}{}:
 		defer func() { <-a.slots }()
 	case <-ctx.Done():
-		return nil, errors.New("private worker capacity/deadline exceeded; shared store was not touched")
+		return nil, observe(codeDeadline, stageCapacity, errors.New("private worker capacity/deadline exceeded; shared store was not touched"))
 	}
 	w, e := startWorker(ctx, a.cfg.WorkerBinary, a.cfg.WorkRoot, a.Version)
 	if e != nil {
@@ -205,10 +205,10 @@ func (a *Adapter) withWorker(ctx context.Context, fn func(*worker) (json.RawMess
 	defer w.close()
 	status, e := w.checked("onto_status", object{})
 	if e != nil {
-		return nil, e
+		return nil, observe(codeIdentity, stageIdentity, e)
 	}
 	if str(status, "version") != a.cfg.UpstreamVersion {
-		return nil, errors.New("private worker engine version mismatch")
+		return nil, observe(codeVersion, stageIdentity, errors.New("private worker engine version mismatch"))
 	}
 	return fn(w)
 }
