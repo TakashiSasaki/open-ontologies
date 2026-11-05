@@ -672,7 +672,7 @@ impl Packer {
             name: req.name.to_string(),
             version: req.version.to_string(),
             created_at: chrono::Utc::now().to_rfc3339(),
-            tool_version: env!("CARGO_PKG_VERSION").to_string(),
+            tool_version: crate::BUILD_VERSION.to_string(),
             triples: lines.len(),
             sha256: checksum(&graph),
             evidence: req.evidence.clone(),

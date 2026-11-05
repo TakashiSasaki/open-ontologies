@@ -27,7 +27,7 @@ fn repo() -> PathBuf {
 /// The version compiled into the binary, which is what every runtime call site
 /// reports and what a pack records.
 fn compiled_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
+    open_ontologies::BUILD_VERSION
 }
 
 /// The newest `vX.Y.Z` tag reachable from HEAD, or `None` when git is absent or

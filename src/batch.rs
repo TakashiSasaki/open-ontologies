@@ -1255,7 +1255,7 @@ impl BatchRunner {
     fn exec_status(&self) -> Value {
         json!({
             "status": "ok",
-            "version": env!("CARGO_PKG_VERSION"),
+            "version": crate::BUILD_VERSION,
             "triples_loaded": self.graph.triple_count(),
         })
     }
