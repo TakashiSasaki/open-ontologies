@@ -66,6 +66,9 @@ use rayon::prelude::*;
 
 use crate::graph::GraphStore;
 
+#[cfg(test)]
+mod diagnostic_trace_tests;
+
 // ── Well-known IRIs (with <> brackets, matching Oxigraph output) ────────
 
 const RDF_TYPE: &str = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>";
@@ -132,6 +135,20 @@ pub enum Concept {
 }
 
 impl Concept {
+    fn diagnostic(&self, names: &Interner) -> String {
+        match self {
+            Self::Top => "⊤".into(),
+            Self::Bottom => "⊥".into(),
+            Self::Atom(id) => names.resolve(*id).into(),
+            Self::NegAtom(id) => format!("¬{}", names.resolve(*id)),
+            Self::And(parts) => format!("({})", parts.iter().map(|p| p.diagnostic(names)).collect::<Vec<_>>().join(" ∧ ")),
+            Self::Or(parts) => format!("({})", parts.iter().map(|p| p.diagnostic(names)).collect::<Vec<_>>().join(" ∨ ")),
+            Self::Exists(role, filler) => format!("∃{}.{}", names.resolve(*role), filler.diagnostic(names)),
+            Self::ForAll(role, filler) => format!("∀{}.{}", names.resolve(*role), filler.diagnostic(names)),
+            Self::MinCard(role, count, filler) => format!("≥{count} {}.{}", names.resolve(*role), filler.diagnostic(names)),
+            Self::MaxCard(role, count, filler) => format!("≤{count} {}.{}", names.resolve(*role), filler.diagnostic(names)),
+        }
+    }
     /// Push negation inward to produce NNF.
     pub fn negate(&self) -> Concept {
         match self {
@@ -1991,6 +2008,7 @@ impl TNode {
 struct ExplanationTrace {
     steps: Vec<String>,
     enabled: bool,
+    symbols: Option<Arc<Interner>>,
 }
 
 impl ExplanationTrace {
@@ -1998,13 +2016,23 @@ impl ExplanationTrace {
         Self {
             steps: Vec::new(),
             enabled,
+            symbols: None,
         }
     }
 
     fn record(&mut self, step: &str) {
         if self.enabled {
-            self.steps.push(step.to_string());
+            if self.steps.len() < 512 {
+                self.steps.push(step.chars().take(2048).collect());
+            } else if self.steps.len() == 512 {
+                self.steps.push("Diagnostic trace truncated at 512 steps; this is not a complete axiom proof.".into());
+            }
         }
+    }
+
+    fn concept(&self, concept: &Concept) -> String {
+        self.symbols.as_ref().map(|names| concept.diagnostic(names))
+            .unwrap_or_else(|| format!("{concept:?}"))
     }
 }
 
@@ -2191,20 +2219,25 @@ impl Tableau {
     }
 
     fn decide(&mut self, concept: &Concept) -> Verdict {
+        if self.trace.enabled {
+            self.trace.record(&format!("Start tableau for {}", self.trace.concept(concept)));
+        }
         let root = self.fresh_node(None, None);
         self.add_label(root, concept.clone());
         // Add GCIs to root
         for gci in self.tbox.gcis.clone() {
             self.add_label(root, gci);
         }
-        if self.expand(0) {
+        let verdict = if self.expand(0) {
             Verdict::Satisfiable
         } else if self.budget.exhausted {
             // We never completed the search, so we have proven nothing.
             Verdict::Unknown
         } else {
             Verdict::Unsatisfiable
-        }
+        };
+        self.trace.record(&format!("Tableau outcome: {verdict:?}"));
+        verdict
     }
 
     fn fresh_node(&mut self, parent: Option<u32>, parent_role: Option<u32>) -> u32 {
@@ -2263,10 +2296,16 @@ impl Tableau {
             return false;
         }
         node.deps.insert(concept.clone(), dep.clone());
+        if self.trace.enabled {
+            self.trace.record(&format!("Node {node_id}: add {}", self.trace.concept(&concept)));
+        }
         // Trigger concept definitions for atomic labels
         if let Concept::Atom(a) = &concept {
             if let Some(defs) = self.tbox.concept_defs.get(a).cloned() {
                 for d in defs {
+                    if self.trace.enabled {
+                        self.trace.record(&format!("Unfold {} → {} at node {node_id}", self.trace.concept(&concept), self.trace.concept(&d)));
+                    }
                     self.add_label(node_id, d);
                 }
             }
@@ -2281,6 +2320,9 @@ impl Tableau {
                             .then(|| n.deps.get(&Concept::Atom(other)).cloned())
                     });
                     if let Some(other_dep) = other_dep {
+                        if self.trace.enabled {
+                            self.trace.record(&format!("Conjunction rule: {} ∧ {} → {} at node {node_id}", self.trace.concept(&concept), self.trace.concept(&Concept::Atom(other)), self.trace.concept(&d)));
+                        }
                         let saved = self.ctx.clone();
                         let mut both = dep.clone();
                         both.extend(other_dep.unwrap_or_else(|| self.all_open()));
@@ -2880,7 +2922,8 @@ impl Tableau {
                     let mut failed = rule_dep.clone();
                     for i in 0..matching.len() {
                         for j in (i + 1)..matching.len() {
-                            let mut branch = self.clone();
+                            let branch_trace_start = self.trace.steps.len();
+                        let mut branch = self.clone();
                             branch.open.push(choice);
                             if alternatives > 1 {
                                 branch.nondeterministic = true;
@@ -2890,7 +2933,13 @@ impl Tableau {
                             branch.ctx = d;
                             branch.merge_nodes(matching[i], matching[j]);
                             branch.ctx = branch.all_open();
-                            if branch.expand(depth + 1) {
+                            let expanded = branch.expand(depth + 1);
+                        if self.trace.enabled {
+                            for step in branch.trace.steps.iter().skip(branch_trace_start) {
+                                self.trace.record(step);
+                            }
+                        }
+                        if expanded {
                                 *self = branch;
                                 return true;
                             }
@@ -2968,6 +3017,7 @@ impl Tableau {
                     // Why every disjunct failed, less this choice itself.
                     let mut failed = or_dep.clone();
                     for disjunct in disjuncts {
+                        let branch_trace_start = self.trace.steps.len();
                         let mut branch = self.clone();
                         branch.open.push(choice);
                         branch.nondeterministic = true;
@@ -2976,7 +3026,13 @@ impl Tableau {
                         branch.ctx = d;
                         branch.add_label(nid, disjunct.clone());
                         branch.ctx = branch.all_open();
-                        if branch.expand(depth + 1) {
+                        let expanded = branch.expand(depth + 1);
+                        if self.trace.enabled {
+                            for step in branch.trace.steps.iter().skip(branch_trace_start) {
+                                self.trace.record(step);
+                            }
+                        }
+                        if expanded {
                             // Only the model emitter asks for the graph back. See
                             // `Tableau::capture`.
                             if self.capture {
@@ -3026,6 +3082,7 @@ impl Tableau {
             }
         }
         if let Some(d) = disjoint_clash {
+            self.trace.record("Clash: disjoint concepts label the same node in the completed branch");
             self.fail_dep = d;
             return false;
         }
@@ -3036,7 +3093,7 @@ impl Tableau {
     /// The first clash on an unblocked node, with the choice points it
     /// depends on. Nodes are visited in id order so the answer does not depend
     /// on `HashMap` iteration.
-    fn clash(&self) -> Option<Dep> {
+    fn clash(&mut self) -> Option<Dep> {
         let mut ids: Vec<u32> = self.nodes.keys().copied().collect();
         ids.sort_unstable();
         for id in ids {
@@ -3045,9 +3102,15 @@ impl Tableau {
                 continue;
             }
             if let Some(d) = n.clash_dep() {
+                if self.trace.enabled {
+                    let mut labels: Vec<_> = n.labels.iter().map(|c| self.trace.concept(c)).collect();
+                    labels.sort();
+                    self.trace.record(&format!("Clash at node {id}: ⊥, a concept/its negation, or incompatible cardinality constraints; labels: {}", labels.join(", ")));
+                }
                 return Some(d.unwrap_or_else(|| self.all_open()));
             }
             if let Some(d) = self.card_clash_via_hierarchy(n) {
+                self.trace.record(&format!("Clash at node {id}: incompatible cardinalities through the class hierarchy"));
                 return Some(d.unwrap_or_else(|| self.all_open()));
             }
         }
@@ -3584,12 +3647,19 @@ impl DlReasoner {
         deadline: Option<Instant>,
     ) -> Option<Vec<String>> {
         let concept = Concept::Atom(class_id);
-        let mut tableau = Tableau::new_with_tracing(Arc::clone(&self.tbox));
-        tableau.budget.deadline = deadline;
-        if !tableau.decide(&concept).is_unsat() {
+        let (verdict, steps) = self.traced_decide(&concept, deadline);
+        if !verdict.is_unsat() {
             return None;
         }
-        Some(tableau.trace.steps)
+        Some(steps)
+    }
+
+    fn traced_decide(&self, concept: &Concept, deadline: Option<Instant>) -> (Verdict, Vec<String>) {
+        let mut tableau = Tableau::new_with_tracing(Arc::clone(&self.tbox));
+        tableau.trace.symbols = Some(Arc::new(self.interner.clone()));
+        tableau.budget.deadline = deadline;
+        let verdict = tableau.decide(concept);
+        (verdict, tableau.trace.steps)
     }
 
     /// Check subsumption with explanation trace.
@@ -3601,9 +3671,8 @@ impl DlReasoner {
         let mut test = vec![sub.clone(), sup.negate()];
         test.sort();
         let test_concept = Concept::And(test);
-        let mut tableau = Tableau::new_with_tracing(Arc::clone(&self.tbox));
-        let verdict = tableau.decide(&test_concept);
-        (verdict.is_unsat(), tableau.trace.steps)
+        let (verdict, steps) = self.traced_decide(&test_concept, self.phase_deadline());
+        (verdict.is_unsat(), steps)
     }
 
     /// Compute told-subsumer transitive closure (for pruning).
@@ -4759,27 +4828,36 @@ impl DlReasoner {
     /// Explain why a named class is unsatisfiable. For agent-friendly MCP tools.
     pub fn explain_class(graph: &Arc<GraphStore>, class_iri: &str) -> anyhow::Result<String> {
         let reasoner = Self::from_graph(graph)?;
-        let class_id = reasoner
+        reasoner.explain_known_class(&crate::rdf_bindings::iri(class_iri)?.to_string())
+    }
+
+    fn explain_known_class(&self, class_iri: &str) -> anyhow::Result<String> {
+        let class_id = self
             .interner
             .to_id
             .get(class_iri)
             .copied()
             .ok_or_else(|| anyhow::anyhow!("Unknown class: {}", class_iri))?;
 
-        match reasoner.explain_unsatisfiable(class_id) {
-            Some(steps) => Ok(serde_json::json!({
-                "class": class_iri,
-                "satisfiable": false,
-                "explanation": steps,
-            })
-            .to_string()),
-            None => Ok(serde_json::json!({
-                "class": class_iri,
-                "satisfiable": true,
-                "explanation": "Class is satisfiable — no clash found.",
-            })
-            .to_string()),
-        }
+        let (verdict, steps) = self.traced_decide(&Concept::Atom(class_id), self.phase_deadline());
+        let satisfiable: Option<bool> = match verdict {
+            Verdict::Satisfiable => Some(true),
+            Verdict::Unsatisfiable => Some(false),
+            Verdict::Unknown => None,
+        };
+        let explanation = if verdict == Verdict::Satisfiable {
+            serde_json::json!("Class is satisfiable — a completed branch was found.")
+        } else {
+            serde_json::json!(steps)
+        };
+        Ok(serde_json::json!({
+            "class": class_iri,
+            "satisfiable": satisfiable,
+            "complete": verdict != Verdict::Unknown,
+            "explanation": explanation,
+            "explanation_kind": "bounded_tableau_diagnostic_not_minimal_axiom_proof",
+            "reason": if verdict == Verdict::Unknown { Some("budget_exhausted") } else { None },
+        }).to_string())
     }
 
     /// Check if class_a ⊑ class_b. For agent-friendly MCP tools.
@@ -4789,29 +4867,43 @@ impl DlReasoner {
         sup_iri: &str,
     ) -> anyhow::Result<String> {
         let reasoner = Self::from_graph(graph)?;
-        let sub_id = reasoner
+        reasoner.check_known_subsumption(
+            &crate::rdf_bindings::iri(sub_iri)?.to_string(),
+            &crate::rdf_bindings::iri(sup_iri)?.to_string(),
+        )
+    }
+
+    fn check_known_subsumption(&self, sub_iri: &str, sup_iri: &str) -> anyhow::Result<String> {
+        let sub_id = self
             .interner
             .to_id
             .get(sub_iri)
             .copied()
             .ok_or_else(|| anyhow::anyhow!("Unknown class: {}", sub_iri))?;
-        let sup_id = reasoner
+        let sup_id = self
             .interner
             .to_id
             .get(sup_iri)
             .copied()
             .ok_or_else(|| anyhow::anyhow!("Unknown class: {}", sup_iri))?;
 
-        let (subsumed, trace) = reasoner.check_subsumption_explained(
-            &Concept::Atom(sub_id),
-            &Concept::Atom(sup_id),
-        );
+        let mut parts = vec![Concept::Atom(sub_id), Concept::Atom(sup_id).negate()];
+        parts.sort();
+        let (verdict, trace) = self.traced_decide(&Concept::And(parts), self.phase_deadline());
+        let subsumed: Option<bool> = match verdict {
+            Verdict::Unsatisfiable => Some(true),
+            Verdict::Satisfiable => Some(false),
+            Verdict::Unknown => None,
+        };
 
         Ok(serde_json::json!({
             "sub_class": sub_iri,
             "super_class": sup_iri,
             "subsumed": subsumed,
             "trace": trace,
+            "complete": verdict != Verdict::Unknown,
+            "explanation_kind": "bounded_tableau_diagnostic_not_minimal_axiom_proof",
+            "reason": if verdict == Verdict::Unknown { Some("budget_exhausted") } else { None },
         })
         .to_string())
     }
