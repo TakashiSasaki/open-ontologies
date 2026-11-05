@@ -13,6 +13,7 @@ if (filter) {
     }
     for (const section of document.querySelectorAll(".namespace")) {
       section.hidden = ![...section.querySelectorAll("[data-search]")].some((entry) => !entry.hidden);
+      if (section.tagName === "DETAILS") section.open = Boolean(query) && !section.hidden;
     }
     status.textContent = `${entries.length} 件中 ${count} 件を表示`;
   };
