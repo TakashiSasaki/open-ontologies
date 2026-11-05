@@ -34,3 +34,12 @@ RDF terms, and complete SPARQL-to-PDDL compilation require engine support. A
 proxy policy check is an advisory point-in-time evaluation, not a transaction
 or universal access-control boundary. Preserve existing upstream patch candidates
 and document any additional engine work with its validation limits.
+
+## Completed 2026-11-05 UTC
+
+All six adapter/deployment steps above are complete. Executable source
+`15a22c0c8c58bd591124d16fcde4ddb0307101dc` is tagged `v0.2.0`. Go race/vet,
+disposable QA audit and integration checks passed, followed by production
+read-only/private regression, public HTTPS and actual connected MCP calls.
+All 141 RDF rows, and the existing policy, action and invariant, were preserved.
+See `docs/compatibility/2026-11-05.md` for frozen identities and engine follow-up.
