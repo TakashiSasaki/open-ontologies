@@ -1,5 +1,8 @@
 <!-- mcp-name: io.github.fabio-rovai/open-ontologies -->
 
+> Native MCP improvements are developed in the TakashiSasaki fork. See
+> [FORK.md](FORK.md) for the upstream base, work plan and patch status.
+
 <p align="center">
   <img src="docs/assets/logo.png" alt="Open Ontologies" width="170">
 </p>

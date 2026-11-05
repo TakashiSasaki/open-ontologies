@@ -1,0 +1,22 @@
+{
+  "checked_at": "2026-11-05T03:04:14.019093+00:00",
+  "base_commit": "375fbc4789debfb57e9c7dfc6bf0e8db8fb21f9b",
+  "method": "git apply --cached --check in a private index, in filename order; no worktree changes",
+  "checks": [
+    {
+      "file": "0001-tableaux-diagnostics-and-unknown-verdicts.patch",
+      "applies_to_current_base": true
+    },
+    {
+      "file": "0002-cli-version-flag.patch",
+      "applies_to_current_base": true
+    },
+    {
+      "file": "0003-pddl-rdf-type-shorthand.patch",
+      "applies_to_current_base": true
+    }
+  ],
+  "candidate_index_tree": "2150da08ba519dbb0700836933dd33be8c30a26e",
+  "fresh_rust_crate_tests": false,
+  "applied_to_worktree": false
+}

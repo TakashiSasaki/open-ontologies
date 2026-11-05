@@ -1,0 +1,60 @@
+{
+  "base_repository": "https://github.com/fabio-rovai/open-ontologies.git",
+  "base_commit": "cefe5997d04553ac495873e8aa1046c1d6b85f7d",
+  "base_version": "2.1.0",
+  "source_fork_commit": "b8cb6ce7d72a82811f3268c951857d3ccb279d1e",
+  "candidate_commits": [
+    "700a71b4b70bf266b3cedcaa37c1c7c30a2b82cb",
+    "a48468dd58b127d53398a63ce689a2de64f87cb1"
+  ],
+  "result_trees": [
+    "7daa3180ef3b88f6f1fc0eb6c2e849a3d142b2f5",
+    "1c0a3a24597482a751509a6a418d6cc3adc2e7dd"
+  ],
+  "result_blobs": {
+    "src/tableaux.rs": "d8687d1c3158944b306f3ae58d8b58940ff67e39",
+    "src/tableaux/diagnostic_trace_tests.rs": "5e1e03702eb94100f4dc6d808eef0cfc60b807b1",
+    "src/main.rs": "aac3fa7fe81d4d430786c056082ffb0e336831c3"
+  },
+  "patches": [
+    {
+      "file": "0001-tableaux-diagnostics-and-unknown-verdicts.patch",
+      "sha256": "ec122feeb988f76fd10f4a459501d775c879df122f8fa049c86c43d2c70f970a"
+    },
+    {
+      "file": "0002-cli-version-flag.patch",
+      "sha256": "fe871d3ec0431de33df7245f599a44666cf41c5d1fca05a9225f2819fa3e6402"
+    }
+  ],
+  "verified_at_utc": "2026-11-04T23:43:08+00:00",
+  "verification": {
+    "apply_check": true,
+    "apply_exact_result_tree": true,
+    "reverse_to_exact_base_tree": true,
+    "native_worktree_unchanged": true,
+    "rust_tests_rerun": false,
+    "method": "apply and reverse in a private Git index; compare exact tree identities",
+    "historical_test_note": "The source fork previously passed its three trace regressions; this reconstructed candidate was not recompiled."
+  },
+  "publication": "Published as candidate files in the TakashiSasaki/open-ontologies fork; not applied to source, no upstream PR",
+  "attribution": "Copyright (c) 2026 \u4f50\u3005\u6728\u9686\u5fd7 (Takashi Sasaki) <takashi316@gmail.com> (https://x.com/TakashiSasaki)",
+  "upstream_license_sha256": "8aecab11d51f3cf7b43440859eb51e7a256f294a648a11b4ed224e9e91ce18bd",
+  "audit_2026_11_05_candidate": {
+    "file": "0003-pddl-rdf-type-shorthand.patch",
+    "format": "git apply unified diff (not a mailbox)",
+    "base_commit": "cefe5997d04553ac495873e8aa1046c1d6b85f7d",
+    "sha256": "6dd8a84c3eb911134546ae7e18f9db90df1555f1dba2da6dc8262ab62b696c7b",
+    "result_tree": "dc6d2f657cdce634852db742efa17ed9f71e2850",
+    "apply_and_reverse_verified": true,
+    "full_rust_crate_tests": false,
+    "scope": "Normalize SPARQL predicate a in the simple PDDL ASK extractor; does not fix constants, symbol collisions, general SPARQL translation or execution readiness.",
+    "verification_note": "Apply/reverse verified; isolated module harness checked separately. Full native crate and runtime engine not rebuilt.",
+    "isolated_module_harness_tests": {
+      "passed": 7,
+      "failed": 0,
+      "uses_stand_in_action_types": true,
+      "full_crate_test": false
+    }
+  },
+  "fork_work_base": "375fbc4789debfb57e9c7dfc6bf0e8db8fb21f9b"
+}
