@@ -1,16 +1,16 @@
 {
   "dataset_sha256": "6cd3b3d0ac4643c4c94c09894bbaa12650615bbe9c23f64f347343bef7392e07",
-  "exported_at": "2026-11-05T07:35:13+00:00",
+  "exported_at": "2026-11-05T07:36:49+00:00",
   "files": {
-    "about.html": "ca99decb36a0b00ff55cbccaaaf1e94c272e73b66539db9fe4e944b554f217b4",
+    "about.html": "4a70e45d21eb0fd56a906f6c60ab31b232e03a4be3f25f87d7605f8fb2befa4e",
     "assets/LICENSE.txt": "18d1d296df73298b5d2441200b0d8ea616caeeefcf65ae9532074426817dad2b",
-    "assets/export.css": "f9c6f2cc184047e4efcfcdc781d8fd516c5f3fdb406dba7321afb87946e83e9e",
+    "assets/export.css": "12f57ca5305b677395abcd563297aafbe959c5cfc2ed87d3a02a86fc5507f216",
     "assets/search.js": "a7f66cf379b36754da275582d55858cf5cdb6e27adb5e0f8bf1a5aeadf211aec",
     "data/dataset.nq": "6cd3b3d0ac4643c4c94c09894bbaa12650615bbe9c23f64f347343bef7392e07",
     "data/graphs/default.nq": "6cd3b3d0ac4643c4c94c09894bbaa12650615bbe9c23f64f347343bef7392e07",
     "data/graphs/default.ttl": "d89f1924607e6d65e4238f514b36aaa8dab3a810a16a148c2081db03b99cd4f0",
     "graphs/default.html": "0dfa09f7a3726c29c7e10194a76fb360a8e3492175ce480c8f399480fb8ef1b3",
-    "index.html": "fb3214ba08e14a6faed65acb7dfa29cc99c50078339023d4a26fa7045aa5762c",
+    "index.html": "6031a66c8fdb821ab11ddf3258b6e05b2ec846de96d5937ea3f4189438fc67a8",
     "sitemap.xml": "68f49463909fda31c973725da1cbb9a6c4bdd8c21ae0201670fdfca86fadff55",
     "terms/0056681a564892bf261ceec55aac266dafd93b9acf82cd326a1b2f9e93018f0e.html": "4c36d2530316595c0bb5c4f82b7d258b230710477ae4f7ab030fa35d8e2267f7",
     "terms/0072a2f3426e4b151aea176687364d7bfcaf2e25d39549be9483e04570dbf251.html": "baa27b9ead364e7f0c288876ebcf65e3254f5556e26341574b5f23baf9d0e54a",
@@ -908,7 +908,7 @@
   "identity": {
     "base_url": "https://open-ontologies.moukaeritai.work/ontologies/",
     "dataset_sha256": "6cd3b3d0ac4643c4c94c09894bbaa12650615bbe9c23f64f347343bef7392e07",
-    "generator": "0.1.0+local.314883f48466",
+    "generator": "0.1.0+local.5458fe032f66",
     "pyoxigraph": "0.5.13",
     "selected_graphs": [
       "default"
