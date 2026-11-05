@@ -197,3 +197,14 @@ func TestClinicalDependencyErrorsStayErrors(t *testing.T) {
 		t.Fatal("valid empty mappings became an error")
 	}
 }
+
+func TestCancelledDefectIsNotReportedAsDeadlineOrCleanResult(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	a := &Adapter{}
+	raw, err := a.defects(ctx, http.Header{}, object{"ontology_turtle": marshal("<urn:s> <urn:p> 1 .")})
+	p := failurePayload(t, raw, err)
+	if str(p, "error_code") != "analysis_cancelled" || boolean(p, "complete") {
+		t.Fatal(string(raw))
+	}
+}

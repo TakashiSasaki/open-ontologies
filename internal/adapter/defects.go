@@ -43,6 +43,12 @@ func (a *Adapter) defects(ctx context.Context, h http.Header, args object) (json
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(seconds)*time.Second)
 	defer cancel()
+	interrupted := func(reason string) (json.RawMessage, error) {
+		if ctx.Err() == context.Canceled {
+			return fail("analysis_cancelled", "The analysis request was cancelled; no complete findings are available")
+		}
+		return fail("analysis_deadline_exceeded", reason)
+	}
 	var turtle string
 	if supplied(args, "ontology_turtle") {
 		scope["kind"] = marshal("inline_document")
@@ -65,7 +71,7 @@ func (a *Adapter) defects(ctx context.Context, h http.Header, args object) (json
 		p, e := a.query(ctx, h, fmt.Sprintf("SELECT ?s ?p ?o WHERE { %s } LIMIT %d", pattern, maxDefectRows+1))
 		if e != nil {
 			if ctx.Err() != nil {
-				return fail("analysis_deadline_exceeded", "The analysis deadline expired while capturing its dataset")
+				return interrupted("The analysis deadline expired while capturing its dataset")
 			}
 			return fail("analysis_snapshot_failed", "The bounded analysis dataset could not be read; no complete result is available")
 		}
@@ -101,7 +107,7 @@ func (a *Adapter) defects(ctx context.Context, h http.Header, args object) (json
 		return w.call("onto_defects", workerArgs)
 	})
 	if ctx.Err() != nil {
-		return fail("analysis_deadline_exceeded", "The analysis deadline expired; the private worker was stopped and no complete findings are available")
+		return interrupted("The analysis deadline expired; the private worker was stopped and no complete findings are available")
 	}
 	if err == nil {
 		var p object

@@ -9,7 +9,6 @@ from pathlib import Path
 import shlex
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
-from urllib.error import HTTPError
 
 MARKER = 'OO_DIAGNOSTIC_PRIVATE_SENTINEL_6c9f'
 TTL = '<https://example.org/diagnostic> <urn:p> "value" .'
