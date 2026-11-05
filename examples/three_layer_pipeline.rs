@@ -11,7 +11,7 @@
 //!   1. Register two action schemas:
 //!      - `add_subclass_edge` (deterministic)
 //!      - `noisy_add_class`  (non-deterministic, #49)
-//!   2. Compile PDDL from those schemas + a goal Turtle slice.
+//!   2. Compile the deterministic schema + a goal; explicitly exclude stochastic actions.
 //!   3. Simulate what a Fast Downward run would have produced
 //!      (no Fast Downward binary required — we use a hardcoded sas_plan
 //!      that the parser eats).
@@ -23,14 +23,14 @@
 //! No external dependencies (Python / DoWhy / Fast Downward) required —
 //! every layer is exercised through its in-process API.
 
-use open_ontologies::civex::{certify_action, ActionFrame, Verdict};
+use open_ontologies::civex::{ActionFrame, Verdict, certify_action};
 use open_ontologies::dynamics::{
-    list_names, lookup, register, ActionSchema, EffectSpec, Outcome, Parameter,
+    ActionSchema, EffectSpec, Outcome, Parameter, list_names, lookup, register,
 };
 use open_ontologies::graph::GraphStore;
 use open_ontologies::plan_classical::parse_sas_plan;
-use open_ontologies::plan_pddl::{compile_domain, compile_problem};
-use open_ontologies::plan_validate::{validate_plan, PlanStep};
+use open_ontologies::plan_pddl::compile;
+use open_ontologies::plan_validate::{PlanStep, validate_plan};
 use open_ontologies::state::StateDb;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -69,7 +69,10 @@ fn build_noisy_add_class_schema() -> ActionSchema {
     // are robust to both outcomes.
     ActionSchema {
         name: "noisy_add_class".to_string(),
-        parameters: vec![Parameter { name: "iri".to_string(), type_iri: None }],
+        parameters: vec![Parameter {
+            name: "iri".to_string(),
+            type_iri: None,
+        }],
         preconditions: vec![],
         effects: vec![], // ignored when outcomes is non-empty
         reversible: true,
@@ -77,13 +80,17 @@ fn build_noisy_add_class_schema() -> ActionSchema {
         outcomes: vec![
             Outcome {
                 probability: 0.8,
-                effects: vec![EffectSpec::AddClass { iri: "{iri}".to_string() }],
+                effects: vec![EffectSpec::AddClass {
+                    iri: "{iri}".to_string(),
+                }],
                 label: Some("clean".to_string()),
             },
             Outcome {
                 probability: 0.2,
                 effects: vec![
-                    EffectSpec::AddClass { iri: "{iri}".to_string() },
+                    EffectSpec::AddClass {
+                        iri: "{iri}".to_string(),
+                    },
                     EffectSpec::AddTriple {
                         subject: "{iri}".to_string(),
                         predicate: "http://example.org/audit#flaggedBy".to_string(),
@@ -126,18 +133,6 @@ fn main() -> anyhow::Result<()> {
         .iter()
         .filter_map(|n| lookup(&db, n).ok().flatten())
         .collect();
-    let compiled = compile_domain("ontology", &schemas);
-    println!("PDDL domain (first 12 lines):");
-    for line in compiled.domain.lines().take(12) {
-        println!("  {}", line);
-    }
-    if !compiled.translation_notes.is_empty() {
-        println!("Translation notes (lossy):");
-        for n in &compiled.translation_notes {
-            println!("  - {}", n);
-        }
-    }
-
     // Compile a problem instance from the seed graph + a goal.
     let init_facts: Vec<(String, String, String)> = graph
         .all_triples()?
@@ -155,7 +150,20 @@ fn main() -> anyhow::Result<()> {
         "http://www.w3.org/2000/01/rdf-schema#subClassOf".to_string(),
         "http://ex.org/Animal".to_string(),
     )];
-    let problem = compile_problem("demo_problem", "ontology", &init_facts, &goal);
+    // Classical PDDL cannot encode stochastic outcomes. Keep the noisy schema
+    // registered, but explicitly exclude it from this deterministic example.
+    let deterministic: Vec<_> = schemas
+        .into_iter()
+        .filter(|s| s.outcomes.is_empty())
+        .collect();
+    let compiled = compile("ontology", &deterministic, &init_facts, &goal);
+    anyhow::ensure!(compiled.execution_ready, "{:?}", compiled.translation_notes);
+    println!("Excluded noisy_add_class: stochastic outcomes are outside classical PDDL");
+    println!("PDDL domain (first 12 lines):");
+    for line in compiled.domain.lines().take(12) {
+        println!("  {}", line);
+    }
+    let problem = &compiled.problem;
     println!("\nPDDL problem (first 4 lines):");
     for line in problem.lines().take(4) {
         println!("  {}", line);
@@ -163,14 +171,27 @@ fn main() -> anyhow::Result<()> {
 
     // ── Layer 3: Planner — simulate the solver's output ─────────────────
     print_section("3. Planner: parse sas_plan from a (mock) Fast Downward run");
-    // What Fast Downward would emit, given the goal:
-    //   1. Declare a new class (noisy_add_class chooses one of two outcomes).
-    //   2. Connect Cat → Animal via subClassOf.
-    let mock_sas_plan = "\
-(noisy_add_class http___ex_org_mammal)\n\
-(add_subclass_edge http___ex_org_cat http___ex_org_animal)\n\
-; cost = 2 (unit cost)\n";
-    let (operators, cost) = parse_sas_plan(mock_sas_plan);
+    // This is simulated solver output, using the compiler's actual symbols.
+    let operator = compiled
+        .action_symbols
+        .iter()
+        .find(|(_, name)| name.as_str() == "add_subclass_edge")
+        .unwrap()
+        .0;
+    let term_symbol = |iri: &str| {
+        compiled
+            .symbols
+            .iter()
+            .find(|(_, value)| value.as_str() == format!("<{iri}>"))
+            .unwrap()
+            .0
+    };
+    let mock_sas_plan = format!(
+        "({operator} {} {})\n; cost = 1 (unit cost)\n",
+        term_symbol("http://ex.org/Cat"),
+        term_symbol("http://ex.org/Animal")
+    );
+    let (operators, cost) = parse_sas_plan(&mock_sas_plan);
     println!("Parsed {} operators (cost: {:?})", operators.len(), cost);
     for (i, op) in operators.iter().enumerate() {
         println!("  step {}: {} {:?}", i, op.name, op.args);
@@ -178,26 +199,27 @@ fn main() -> anyhow::Result<()> {
 
     // ── Layer 3: Planner — bind PDDL args back to original IRIs ─────────
     print_section("4. Bind PDDL args back to IRIs (orchestrator side)");
-    // The orchestrator knows the schemas it registered, so it can map each
-    // operator's positional args to the schema's parameter names. PDDL
-    // identifiers are sanitised IRIs (`/` `:` `#` → `_`); for this demo we
-    // hardcode the inverse mapping the orchestrator would maintain.
-    let iri_map: BTreeMap<&str, &str> = BTreeMap::from([
-        ("http___ex_org_mammal", "http://ex.org/Mammal"),
-        ("http___ex_org_cat", "http://ex.org/Cat"),
-        ("http___ex_org_animal", "http://ex.org/Animal"),
-    ]);
+    // The compiler publishes reversible operator/parameter/term symbol maps.
     let mut plan_steps: Vec<PlanStep> = Vec::new();
     for op in &operators {
-        let schema = lookup(&db, &op.name)?
-            .ok_or_else(|| anyhow::anyhow!("unknown action `{}` in plan", op.name))?;
+        let action_name = &compiled.action_symbols[&op.name];
+        let parameters = &compiled.parameter_symbols[&op.name];
+        anyhow::ensure!(parameters.len() == op.args.len(), "operator arity mismatch");
         let mut bindings = BTreeMap::new();
-        for (param, arg) in schema.parameters.iter().zip(op.args.iter()) {
-            let resolved = iri_map.get(arg.as_str()).copied().unwrap_or(arg.as_str()).to_string();
-            bindings.insert(param.name.clone(), resolved);
+        for ((_, param), arg) in parameters.iter().zip(&op.args) {
+            let term = open_ontologies::rdf_bindings::term(&compiled.symbols[arg])?;
+            // The remainder of this IRI-only demo prints bare IRIs in frames.
+            let iri = match term {
+                oxigraph::model::Term::NamedNode(n) => n.into_string(),
+                _ => anyhow::bail!("demo expects IRI arguments"),
+            };
+            bindings.insert(param.clone(), iri);
         }
         println!("  {} bindings: {:?}", op.name, bindings);
-        plan_steps.push(PlanStep { action_name: op.name.clone(), bindings });
+        plan_steps.push(PlanStep {
+            action_name: action_name.clone(),
+            bindings,
+        });
     }
 
     // ── Layer 3: Planner — validate the bound plan in a sandbox ─────────
@@ -217,7 +239,11 @@ fn main() -> anyhow::Result<()> {
         report.unsatisfied_goals.len()
     );
     // The real graph must still be untouched at this point.
-    assert_eq!(graph.triple_count(), 3, "sandbox must not mutate real graph");
+    assert_eq!(
+        graph.triple_count(),
+        3,
+        "sandbox must not mutate real graph"
+    );
 
     // ── Layer 2: Causal — certify + apply each step ─────────────────────
     print_section("6. Per-step: CIVeX certify, then apply with ramification");
@@ -272,8 +298,7 @@ fn main() -> anyhow::Result<()> {
 
         // Apply with OWL-RL ramification + a deterministic seed so the
         // non-deterministic outcome is reproducible across runs of the demo.
-        let result =
-            schema.apply_with_ramification(&graph, &db, &bindings, "owl-rl")?;
+        let result = schema.apply_with_ramification(&graph, &db, &bindings, "owl-rl")?;
         // For nondeterministic schemas, apply_with_ramification used SystemTime
         // seeding inside apply(). For a deterministic demo we'd use
         // apply_with_seed first; for clarity here we just print what landed.
@@ -292,16 +317,27 @@ fn main() -> anyhow::Result<()> {
     let ask = graph.sparql_select(
         "ASK { <http://ex.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://ex.org/Animal> }",
     )?;
-    println!("Cat rdfs:subClassOf Animal? {}", if ask.contains("\"result\":true") { "YES" } else { "no" });
-    let ask2 = graph.sparql_select(
-        "ASK { <http://ex.org/tigger> a <http://ex.org/Animal> }",
-    )?;
+    println!(
+        "Cat rdfs:subClassOf Animal? {}",
+        if ask.contains("\"result\":true") {
+            "YES"
+        } else {
+            "no"
+        }
+    );
+    let ask2 = graph.sparql_select("ASK { <http://ex.org/tigger> a <http://ex.org/Animal> }")?;
     println!(
         "tigger a Animal (entailed via OWL-RL ramification)? {}",
-        if ask2.contains("\"result\":true") { "YES" } else { "no" }
+        if ask2.contains("\"result\":true") {
+            "YES"
+        } else {
+            "no"
+        }
     );
 
-    println!("\nDone. Every layer of the three-layer architecture exercised through its public API.");
+    println!(
+        "\nDone. Every layer of the three-layer architecture exercised through its public API."
+    );
     Ok(())
 }
 
@@ -329,13 +365,21 @@ fn synthesise_proposed_ttl(schema: &ActionSchema, bindings: &[(String, String)])
     let mut ttl = String::new();
     for effect in effects {
         match effect {
-            EffectSpec::AddTriple { subject, predicate, object } => {
+            EffectSpec::AddTriple {
+                subject,
+                predicate,
+                object,
+            } => {
                 let s = schema.substitute(subject, bindings);
                 let p = schema.substitute(predicate, bindings);
                 let o = schema.substitute(object, bindings);
                 ttl.push_str(&format!("<{}> <{}> <{}> .\n", s, p, o));
             }
-            EffectSpec::RemoveTriple { subject, predicate, object } => {
+            EffectSpec::RemoveTriple {
+                subject,
+                predicate,
+                object,
+            } => {
                 // Removal isn't expressible in Turtle directly; CIVeX uses the
                 // delta as the post-state under structural-dependency analysis,
                 // so we omit removals here and rely on the lock-IRI machinery
