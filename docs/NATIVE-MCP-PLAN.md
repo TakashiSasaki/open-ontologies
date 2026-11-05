@@ -46,4 +46,10 @@ engine plus independent adapters. Native work is built and qualified separately.
 
 ## Progress
 
-- Planning and current-base source review complete; implementation in progress.
+- All five implementation stages are committed. The qualified executable source
+  is recorded in `NATIVE-MCP-VERIFICATION.md` independently from later docs.
+- Native arm64 image, HTTP/STDIO, modern bridge, restart-before-MCP policy guard
+  and real Fast Downward roundtrips have passed on disposable data.
+- Complete Rust suite passed: 2,308 successful tests, 0 failed, 2 explicitly
+  ignored. The 45 focused regressions, native example and all-target Clippy also
+  passed. Final publication includes the frozen environment and adoption limits.

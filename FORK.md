@@ -1,69 +1,107 @@
-# Native MCP improvement work
+# Native Open Ontologies fork
 
 Copyright (c) 2026 佐々木隆志 (Takashi Sasaki) <takashi316@gmail.com> (https://x.com/TakashiSasaki)
 
-This public fork keeps the Rust source, tests, Cargo manifests and root
-`Dockerfile` together for native Open Ontologies improvements.
+This branch contains native Rust fixes to the upstream MIT-licensed source. The root Dockerfile builds the modified source. The independent
+compatibility proxy, application adapter and public landing page remain separate
+repositories.
 
-- Upstream: <https://github.com/fabio-rovai/open-ontologies>
-- Fork: <https://github.com/TakashiSasaki/open-ontologies>
-- Working branch: `codex/native-mcp-improvements`.
-- Initial upstream base: `375fbc4789debfb57e9c7dfc6bf0e8db8fb21f9b`
-  (inspected 2026-11-05 UTC, package version 2.1.0).
-- The earlier deployed/audited baseline was
-  `cefe5997d04553ac495873e8aa1046c1d6b85f7d`. Previous findings and patch
-  candidates must be requalified against this newer source.
+- Upstream base: `375fbc4789debfb57e9c7dfc6bf0e8db8fb21f9b`, upstream version 2.1.0.
+- Development: `TakashiSasaki/open-ontologies`, `codex/native-mcp-improvements`.
+- Current candidate: `a74f122c88269ec3b2300aae952d52e7d7befa94`.
+- Plan: [docs/NATIVE-MCP-PLAN.md](docs/NATIVE-MCP-PLAN.md).
+- Verification and image identities: [docs/NATIVE-MCP-VERIFICATION.md](docs/NATIVE-MCP-VERIFICATION.md).
 
-## Preparation status
+## Implemented engine changes
 
-This initial fork change records the plan and preserves three extracted native
-patch candidates under `patches/proposed-native/`. They are **not applied source
-changes or an automatic build patch series**. Publishing this preparation branch
-does not claim a newly tested engine image or production deployment.
+1. Native graph writes use fail-closed policy decisions over validated RDF
+   terms. The shared server binds its metadata authority at startup; HTTP
+   sessions reuse that connection. CLI and batch writers bind it too.
+2. Preconditions and effects share whole-term bindings. Actions and concurrent
+   ticks stage their RDF changes, check invariants and policies, and commit
+   once. Failed actions discard their staged state. Ramification is computed
+   privately before publication; effect counts report actual changes. Snapshot
+   rollback releases metadata reads before mutation and replaces the dataset
+   atomically, including policy/parse failures.
+3. DL class diagnostics retain failed branches and clashes, with bounded output.
+   Exhausted class explanation/subsumption searches return an unknown verdict.
+4. PDDL domain and problem are compiled together for a finite deterministic
+   fragment, including `a` normalization, declared typed constants, reversible
+   symbols and delete-wins semantics for aliased action parameters. Unsupported
+   constructs or unencoded native guards withhold execution readiness.
+5. Application JSON errors become MCP tool errors. Valid negative findings
+   remain normal results. CLI, MCP, health, batch and saved packages report the
+   same fork build identity. Docker CI passes that identity explicitly.
 
-Upstream already pins Rust 1.99.1 and uses `cargo build --locked` in the root
-Dockerfile; this branch inherits both. Base images are not digest-pinned and apt
-packages are not a frozen snapshot, so bit-for-bit rebuilds are not yet promised.
+## Policy and transaction boundary
 
-## Native work plan
+A server-owned graph checks all its central RDF mutators, including bulk loads,
+SPARQL updates, clear/replace and action effects. Targets are subjects of actual
+changed quads plus created/dropped named-graph identities. No-op writes need no
+authorization. Rules evaluate against the committed **pre-state**, using the
+existing deny-overrides/default-allow combination. Input, query and storage
+errors abort the change. Blank nodes are bound by stored identity.
 
-1. **Policy enforcement at mutation time.** Define deny/error semantics and
-   coordinate policy lookup, graph reads and actual writes, including concurrent
-   and background writers, partial failures and rollback. A proxy preflight
-   cannot guarantee this. SQLite metadata and the RDF store do not share a
-   transaction automatically.
-2. **Consistent action RDF terms.** Unify ASK/SELECT bindings and effects,
-   distinguishing IRIs and literals. Reproduce bare/bracketed IRIs and inspect
-   stored schemas before changing meaning. Qualify actual and concurrent apply.
-3. **DL diagnostics.** Review the archived tableau patch against this base;
-   preserve newer upstream budget fixes. Expose bounded clash/branch diagnostics
-   and undecided results for exhausted searches. Diagnostics are not minimal
-   axiom justifications or machine-checked proofs.
-4. **PDDL.** Review the narrow archived predicate-`a` correction, then define
-   supported SPARQL, constant declarations, reversible collision-free symbols
-   and RDF term sorts. Report incomplete translation and qualify solver execution.
-5. **Build identity and packaging.** Preserve upstream numeric version 2.1.0;
-   identify modified builds as `2.1.0+local.<commit>[.dirty]` in CLI/status/MCP
-   and container metadata. Supply provenance explicitly to Docker builds:
-   linked-worktree Git pointers do not resolve inside the build container.
-   Package external proof tools/solvers only with deliberate functional checks.
+SQLite `BEGIN IMMEDIATE` freezes policy configuration and serializes governed
+writers while an RDF transaction stages, checks and commits. This is not a
+distributed transaction: lineage/audit entries are recorded separately after
+commit. A multi-stage tool can still consist of multiple individually guarded
+RDF commits. With policies, the implementation scans before/after quads to find
+actual changed targets; large-store performance is not qualified here.
 
-Keep independent fixes and their reproductions in separate commits. The generic
-MCP bridge and application adapter remain separate projects; check interaction
-with their normalizations/private workers rather than importing old interface
-changes blindly into the engine.
+Policy administration remains trusted configuration. It is not per-client
+identity/tenant authorization, nor a filesystem/network access policy. A standalone
+library `GraphStore::new()` remains ungoverned until explicitly bound; bind before
+exposing it to concurrent writers. Reuse `StateDb` clones for one shared graph.
+Independently opened metadata authorities are rejected.
 
-## Validation and adoption
+## Input and planning compatibility
 
-For source changes, run focused Rust tests and relevant existing integration
-checks, then build the root Dockerfile for Linux arm64. Exercise MCP through
-the adapter using an isolated data mount. Patch-application checks are not Rust
-tests; missing optional solvers/checkers are not failed core-engine tests.
+Bindings accept a bare absolute IRI or `<IRI>`, and literals in N-Triples form,
+such as `"SN-003"` or `"3"^^<http://www.w3.org/2001/XMLSchema#integer>`.
+Use whole `{param}` or `<{param}>` slots. Partial IRI/literal interpolation is
+rejected. Existing stored schemas using `"{value}"` or callers passing unquoted
+literal strings need an explicit migration. `check_preconditions=false` remains
+accepted for compatibility but cannot bypass the transaction's check.
 
-Before deployment, preserve data/logs and the prior image; record exact source,
-image and executable identities. The adapter's private worker must match the
-new HTTP engine build. Verify catalog/annotation behavior and actual cloud tool
-calls before declaring the deployment qualified. Keep credentials and live
-graph/registry payloads outside this public repository.
+The executable PDDL fragment is finite, default-graph, positive ASK basic triple
+patterns and deterministic triple effects. Constants come from actions, initial
+facts and goals. General SPARQL, blank-node identity, stochastic effects, OWL
+entailment and native guard compilation are not supported. A captured planning
+model is advisory: actual apply always checks its live pre-state and policies.
+The Rust helper API is now `plan_pddl::compile(domain, schemas, init, goals)`;
+the old independent domain/problem helpers could not declare constants correctly.
 
-The upstream MIT notice is retained; fork contributions are MIT-licensed.
+DL traces are operational diagnostics (512 steps plus a truncation marker,
+2048 characters per step), not minimal axiom explanations or checked proofs.
+Legacy boolean helper APIs elsewhere are not globally changed to three states.
+Optional external proof checkers, planners, models and crosswalk data are not
+bundled merely because their tools are advertised.
+
+## Build and adoption
+
+Build from a clean checkout with Docker, Git and Bash:
+
+```sh
+bash scripts/build-native-image.sh open-ontologies:my-native-build --platform linux/arm64
+```
+
+The helper retains upstream version 2.1.0 and passes `+local.<12-digit-commit>`
+and full OCI source revision. A direct Docker build without provenance explicitly
+reports `+local.archive`. `NATIVE_BUILDER_IMAGE` optionally selects a prewarmed
+builder, whose Rust 1.99.1 compiler is checked. Base tags and apt repositories are
+not immutable snapshots, so source/lockfile pins do not promise bit-for-bit
+rebuilds; freeze actual image/binary hashes independently.
+
+The qualified local candidate does **not** replace production. Production still
+uses the older unmodified `cefe5997d045...` engine plus the separate adapter.
+Adoption needs a verified cold data backup, inspection/migration of stored action
+templates, matching adapter worker/version/hash configuration, isolated chain
+tests and an explicitly scheduled cutover. Keep existing tunnel identity,
+credentials, access policy, logs and rollback image. Cloud-connected ChatGPT/Gemini
+calls have not yet been tested with this native candidate.
+
+The preserved patch files under `patches/proposed-native/` remain byte-for-byte
+historical proposals against `cefe5997d045...`. Their diagnostics/version ideas
+are implemented in current source; the narrow old PDDL patch is superseded by
+the new compiler. They are not reapplied during a Docker build.

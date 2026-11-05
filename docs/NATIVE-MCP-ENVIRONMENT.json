@@ -1,0 +1,73 @@
+{
+  "recorded_at_utc": "2026-11-05T05:25:56.823618+00:00",
+  "tested_source_revision": "a74f122c88269ec3b2300aae952d52e7d7befa94",
+  "upstream_revision": "375fbc4789debfb57e9c7dfc6bf0e8db8fb21f9b",
+  "version": "2.1.0+local.a74f122c8826",
+  "platform": {
+    "os": "Ubuntu 24.04.4 LTS",
+    "architecture": "aarch64",
+    "kernel": "6.17.0-1011-oracle",
+    "docker": "29.7.2"
+  },
+  "rust": "1.99.1 (58cf8f9c3 2026-10-13)",
+  "features": [
+    "embeddings",
+    "plugins",
+    "sql"
+  ],
+  "image": {
+    "tag": "open-ontologies:2.1.0-native-a74f122c8826",
+    "id": "sha256:93989cb0f72dc52eb46d32ccfd0b0203e7a6e6fc1b609cd2920da7eadb23e4b0",
+    "locally_built": true,
+    "registry_publication": false,
+    "tar_sha256": "b9d62b5df5f8faf65aefd49805d6e9a98ceab3edc2de66f1c142942d55cf9d74"
+  },
+  "executable_sha256": "a294b0c0b6c7010ea74ed5475e53f9b11ed72b399eda3dd4fbaea60e59a86f20",
+  "cargo_lock_sha256": "86d63446f344f58388e448ce5f95cf951731d4ca51548b51bcfaf42eb21f949b",
+  "source_blobs": {
+    "Cargo.toml": "83885caba6c06c758463770c9335f62c56309ab5",
+    "Cargo.lock": "1bed80df2a945e5de784e7314dbb4a6388122178",
+    "Dockerfile": "99c2e1f19eed4c146f1fb75b1d148f9c81b2572c",
+    "build.rs": "06c6a2689ba496fc50a90a6f4ac24ef898487cb7",
+    "src/main.rs": "61c2d95467aa7175f72c1a38f214b6f1837cfdad",
+    "src/server.rs": "489b58cf027ad98aa71b83f155193325e6f5fb80",
+    "src/graph.rs": "abe91896674040fb94996af4655401be1ef6c345",
+    "src/policy.rs": "866f9935893dc62c0e2f43683c0414372589f46c",
+    "src/rdf_bindings.rs": "596e6e6b1a31107845037fd3e82df0d2258c2401",
+    "src/dynamics.rs": "dd5919139d469aa6b6afd38f3e4599dc8f0c9442",
+    "src/dynamics_bcplus.rs": "0879a8c1fa4c00d30982aed2f56bc011e92f1099",
+    "src/tableaux.rs": "8276edf152fcbf02add6232a2b4248137e9b100d",
+    "src/plan_pddl.rs": "9f6d274d7055b3960e801033fb179ecc7b52e58b",
+    "src/ontology.rs": "025f3578992de2c1d1f97734677f74b2aef9c01a",
+    "tests/native_policy_guard_test.rs": "f9b01006255fac349f3d1d9d0381d62a21665812"
+  },
+  "checks": {
+    "clippy_all_targets": "passed",
+    "native_HTTP_MCP": "passed",
+    "native_STDIO": "passed",
+    "modern_bridge": "passed",
+    "real_Fast_Downward_roundtrip": "passed",
+    "restart_REST_before_MCP": "passed",
+    "full_rust_suite": {
+      "status": "passed",
+      "groups": 250,
+      "passed": 2308,
+      "failed": 0,
+      "ignored": 2
+    },
+    "focused_regressions": {
+      "passed": 45,
+      "failed": 0
+    },
+    "atomic_snapshot_rollback": "passed",
+    "example_execution": "passed"
+  },
+  "cloud_app_verification": {
+    "ChatGPT": "not tested with native candidate",
+    "Gemini": "not tested with native candidate"
+  },
+  "production_cutover": false,
+  "copyright": "Copyright (c) 2026 佐々木隆志 (Takashi Sasaki) <takashi316@gmail.com> (https://x.com/TakashiSasaki)",
+  "verification_git_metadata": "shared bare repository and linked worktree mounted read-only at their original paths",
+  "optional_fixtures": "normal upstream availability behavior; external proof kernel acceptance not claimed"
+}

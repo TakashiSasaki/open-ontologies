@@ -8,6 +8,14 @@ They are published as proposals in the TakashiSasaki fork; no upstream issue
 or pull request has been made. These files do not alter the working source or Docker build.
 The adapter's existing `v0.1.0` tag remains the original deployment checkpoint.
 
+Current-source note (2026-11-05): the native development branch now implements
+these diagnostics/version ideas and a broader PDDL compiler against the newer
+`375fbc4789debfb57e9c7dfc6bf0e8db8fb21f9b` base. Read [FORK.md](../../FORK.md)
+and [native verification](../../docs/NATIVE-MCP-VERIFICATION.md) for that separate
+source/image qualification. The archived patch bytes, base and historical
+verification statements below remain unchanged; do not apply them again to the
+modified native source.
+
 Target repository: <https://github.com/fabio-rovai/open-ontologies.git>.
 Exact base: **`cefe5997d04553ac495873e8aa1046c1d6b85f7d`**, upstream 2.1.0.
 Extraction source: local fork commit
