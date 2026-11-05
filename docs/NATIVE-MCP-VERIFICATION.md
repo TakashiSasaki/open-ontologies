@@ -2,9 +2,10 @@
 
 Copyright (c) 2026 佐々木隆志 (Takashi Sasaki) <takashi316@gmail.com> (https://x.com/TakashiSasaki)
 
-This records a local Linux arm64 candidate. Production, public HTTPS and the
-OpenAI tunnel still use the older unmodified engine plus independent adapters.
-New ChatGPT/Gemini cloud calls against this native candidate are not claimed.
+This records the pre-deployment Linux arm64 qualification. The subsequent
+user-authorized production adoption is recorded separately in
+[NATIVE-MCP-DEPLOYMENT-2026-11-05.md](NATIVE-MCP-DEPLOYMENT-2026-11-05.md).
+Cloud results below describe the original qualification boundary.
 
 ## Frozen identities
 

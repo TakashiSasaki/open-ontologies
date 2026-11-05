@@ -105,13 +105,14 @@ builder, whose Rust 1.99.1 compiler is checked. Base tags and apt repositories a
 not immutable snapshots, so source/lockfile pins do not promise bit-for-bit
 rebuilds; freeze actual image/binary hashes independently.
 
-The qualified local candidate does **not** replace production. Production still
-uses the older unmodified `cefe5997d045...` engine plus the separate adapter.
-Adoption needs a verified cold data backup, inspection/migration of stored action
-templates, matching adapter worker/version/hash configuration, isolated chain
-tests and an explicitly scheduled cutover. Keep existing tunnel identity,
-credentials, access policy, logs and rollback image. Cloud-connected ChatGPT/Gemini
-calls have not yet been tested with this native candidate.
+The user authorized production adoption on 2026-11-05. The deployed engine is
+`2.1.0+local.a74f122c8826`, with a matching extracted worker and adapter
+`0.2.0+local.234dff0ea4d6`. The complete 141-quad graph and stored action,
+policy and invariant registries were preserved. The existing tunnel resumed
+and a connected MCP app returned the new engine identity. See
+[the deployment record](docs/NATIVE-MCP-DEPLOYMENT-2026-11-05.md) for verification,
+remaining limits and rollback. The earlier qualification record remains a
+historical pre-deployment snapshot.
 
 The preserved patch files under `patches/proposed-native/` remain byte-for-byte
 historical proposals against `cefe5997d045...`. Their diagnostics/version ideas
