@@ -277,24 +277,33 @@ impl OntologyService {
     }
 
     /// Rollback the graph store to a previously saved version.
-    pub fn rollback_version(db: &StateDb, store: &Arc<GraphStore>, label: &str) -> anyhow::Result<String> {
-        let conn = db.conn();
-        let (content, format): (String, String) = conn.query_row(
-            "SELECT content, format FROM ontology_versions WHERE label = ?1 ORDER BY id DESC LIMIT 1",
-            rusqlite::params![label],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-        let rdf_format = match format.as_str() {
-            "nquads" => RdfFormat::NQuads,
-            "ntriples" => RdfFormat::NTriples,
-            _ => anyhow::bail!("unsupported saved version format: {format}"),
+    pub fn rollback_version(
+        db: &StateDb,
+        store: &Arc<GraphStore>,
+        label: &str,
+    ) -> anyhow::Result<String> {
+        // Release the metadata connection before the governed graph writer
+        // acquires it. The version payload is immutable for this request.
+        let (content, format): (String, String) = {
+            let conn = db.conn();
+            conn.query_row(
+                "SELECT content, format FROM ontology_versions WHERE label = ?1 ORDER BY id DESC LIMIT 1",
+                rusqlite::params![label],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?
         };
-        store.clear()?;
-        let count = store.load_content(&content, rdf_format)?;
+        anyhow::ensure!(
+            matches!(format.as_str(), "nquads" | "ntriples"),
+            "unsupported saved version format: {format}"
+        );
+        // N-Triples is a subset of N-Quads. Parse before replacing, then check
+        // only the actual final delta in a single native write transaction.
+        let count = store.replace_nquads(&content)?;
         Ok(serde_json::json!({
             "ok": true,
             "label": label,
             "triples_restored": count,
-        }).to_string())
+        })
+        .to_string())
     }
 }

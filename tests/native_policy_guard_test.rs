@@ -4,6 +4,7 @@
 
 use open_ontologies::{
     graph::GraphStore,
+    ontology::OntologyService,
     policy::{self, PolicyRule},
     state::StateDb,
 };
@@ -166,4 +167,37 @@ fn persistent_store_denial_survives_reopening() {
         GraphStore::open_persistent(&path).unwrap().triple_count(),
         1
     );
+}
+
+#[test]
+fn rollback_releases_metadata_and_replaces_atomically() {
+    let (db, graph) = fixture();
+    OntologyService::save_version(&db, &graph, "before").unwrap();
+    graph.load_turtle("<urn:free> <urn:p> 1 .", None).unwrap();
+    let rollback = |label: &str| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (db, graph, label) = (db.clone(), graph.clone(), label.to_string());
+        let worker = std::thread::spawn(move || {
+            tx.send(OntologyService::rollback_version(&db, &graph, &label))
+                .unwrap();
+        });
+        let result = rx
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .expect("rollback must release the metadata lock before graph mutation");
+        worker.join().unwrap();
+        result
+    };
+    assert!(rollback("before").is_ok());
+    assert_eq!(graph.triple_count(), 2);
+    for (label, content) in [
+        ("malformed", "<urn:free> <urn:p> <urn:o> .\nnot RDF"),
+        ("denied", "<urn:org> <urn:p> <urn:o> ."),
+    ] {
+        db.conn().execute(
+            "INSERT INTO ontology_versions (label,triple_count,content,format) VALUES (?1,1,?2,'nquads')",
+            rusqlite::params![label,content],
+        ).unwrap();
+        assert!(rollback(label).is_err());
+        assert_eq!(graph.triple_count(), 2);
+    }
 }
