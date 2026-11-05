@@ -133,6 +133,7 @@ fn rejected_tick_preserves_preexisting_triples_and_empty_graphs() {
     g.load_turtle("<urn:old> a <http://www.w3.org/2002/07/owl#Class> .", None)
         .unwrap();
     g.sparql_update("CREATE GRAPH <urn:empty>").unwrap();
+    assert!(ask(&g, "ASK { GRAPH <urn:empty> {} }"));
     let mut a = schema();
     a.parameters.clear();
     a.preconditions.clear();
@@ -165,12 +166,7 @@ fn rejected_tick_preserves_preexisting_triples_and_empty_graphs() {
     .unwrap();
     assert_eq!(r.steps_applied, 0);
     assert_eq!(g.triple_count(), 1);
-    assert!(
-        g.named_graph_iris()
-            .unwrap()
-            .iter()
-            .any(|s| s == "urn:empty" || s == "<urn:empty>")
-    );
+    assert!(ask(&g, "ASK { GRAPH <urn:empty> {} }"));
     assert!(ask(
         &g,
         "ASK { <urn:old> a <http://www.w3.org/2002/07/owl#Class> }"
