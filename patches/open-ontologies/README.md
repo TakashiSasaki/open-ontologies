@@ -14,7 +14,8 @@ Extraction source: local fork commit
 `b8cb6ce7d72a82811f3268c951857d3ccb279d1e`. The local native Git history is
 retained separately. [manifest.json](manifest.json) records provenance, candidate
 commit/tree/blob identities and verification; [SHA256SUMS](SHA256SUMS) fixes the
-mailbox bytes. The patches use normal `git format-patch` format.
+patch bytes. Patches 0001/0002 use `git format-patch`; 0003 is a standalone
+unified diff for `git apply`, as detailed below.
 
 | Patch | Preserved behavior | Native files |
 | --- | --- | --- |
