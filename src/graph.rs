@@ -5,10 +5,12 @@ use std::collections::BTreeSet;
 use std::io::Cursor;
 use std::path::Path;
 
+use crate::state::StateDb;
 use oxigraph::io::{JsonLdProfileSet, RdfFormat, RdfParser, RdfSerializer};
 use oxigraph::model::*;
 use oxigraph::sparql::{QueryResults, SparqlEvaluator};
-use oxigraph::store::Store;
+use oxigraph::store::{Store, Transaction};
+use std::sync::{Arc, RwLock};
 
 /// A document's quads and the namespace prefixes it declared, in order.
 pub type ParsedDocument = (Vec<Quad>, Vec<(String, String)>);
@@ -73,7 +75,10 @@ impl ReadScope {
     pub fn graphs_read(&self) -> Vec<String> {
         match self {
             ReadScope::AllGraphs => vec!["(every graph in the store)".to_string()],
-            ReadScope::Graphs { default_graph, named } => {
+            ReadScope::Graphs {
+                default_graph,
+                named,
+            } => {
                 let mut v = Vec::with_capacity(named.len() + 1);
                 if *default_graph {
                     v.push("(default graph)".to_string());
@@ -152,7 +157,10 @@ impl SparqlAuth {
             (Some(u), None) => Some((u, String::new())),
             _ => None,
         };
-        SparqlAuth { basic, bearer: token }
+        SparqlAuth {
+            basic,
+            bearer: token,
+        }
     }
 
     /// Apply the configured auth to a request builder.
@@ -186,6 +194,15 @@ pub type AssertedTriples = (Vec<(String, String, String)>, Vec<String>);
 /// the process into a poisoned lock and a second panic in every later request.
 pub struct GraphStore {
     store: Store,
+    policy_db: RwLock<PolicyBinding>,
+}
+
+#[derive(Clone, Default)]
+enum PolicyBinding {
+    #[default]
+    Unbound,
+    Bound(StateDb),
+    Conflict,
 }
 
 /// Why [`GraphStore::canonicalize_pair`] compared only ground triples.
@@ -213,6 +230,7 @@ impl GraphStore {
     pub fn new() -> Self {
         Self {
             store: Store::new().expect("Failed to create Oxigraph store"),
+            policy_db: RwLock::new(PolicyBinding::Unbound),
         }
     }
 
@@ -235,7 +253,130 @@ impl GraphStore {
                 path.display()
             )
         })?;
-        Ok(Self { store })
+        Ok(Self {
+            store,
+            policy_db: RwLock::new(PolicyBinding::Unbound),
+        })
+    }
+
+    /// Bind policy administration before exposing a shared store to writers.
+    /// Reusing a graph with incompatible metadata authorities fails closed.
+    pub fn bind_policy_db(&self, db: StateDb) {
+        if let Ok(mut binding) = self.policy_db.write() {
+            match &*binding {
+                PolicyBinding::Unbound => *binding = PolicyBinding::Bound(db),
+                PolicyBinding::Bound(old) if old.same_connection(&db) => {}
+                _ => *binding = PolicyBinding::Conflict,
+            }
+        }
+    }
+
+    pub(crate) fn transaction_copy(tx: &Transaction<'_>) -> anyhow::Result<Arc<Self>> {
+        let copy = Self::new();
+        for q in tx.iter() {
+            copy.store.insert(&q?)?;
+        }
+        for name in tx.named_graphs() {
+            copy.store.insert_named_graph(&name?)?;
+        }
+        Ok(Arc::new(copy))
+    }
+
+    pub(crate) fn owned_quads(&self) -> anyhow::Result<Vec<Quad>> {
+        Ok(self.store.iter().collect::<Result<_, _>>()?)
+    }
+
+    pub(crate) fn with_read_transaction<T>(
+        &self,
+        f: impl FnOnce(&Transaction<'_>) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        let tx = self.store.start_transaction()?;
+        f(&tx)
+    }
+
+    /// Policy configuration is held under SQLite BEGIN IMMEDIATE while the
+    /// RDF transaction is staged, authorized against its committed pre-state,
+    /// and committed. The SQLite transaction only reads and rolls back on drop;
+    /// this does not claim atomic durability of a separate audit-log write.
+    pub(crate) fn write_transaction<T>(
+        &self,
+        db: Option<&StateDb>,
+        f: impl FnOnce(&mut Transaction<'_>, Option<&rusqlite::Connection>) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        if let Some(db) = db {
+            self.bind_policy_db(db.clone());
+        }
+        let binding = self
+            .policy_db
+            .read()
+            .map_err(|_| anyhow::anyhow!("policy binding poisoned"))?
+            .clone();
+        match binding {
+            PolicyBinding::Conflict => anyhow::bail!("graph has conflicting policy authorities"),
+            PolicyBinding::Bound(db) => {
+                let mut conn = db.conn();
+                let metadata =
+                    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                let rules = crate::policy::read_rules(&metadata)?;
+                self.write_checked(&rules, Some(&metadata), f)
+            }
+            PolicyBinding::Unbound => self.write_checked(&[], None, f),
+        }
+    }
+
+    fn write_checked<T>(
+        &self,
+        rules: &[crate::policy::PolicyRule],
+        conn: Option<&rusqlite::Connection>,
+        f: impl FnOnce(&mut Transaction<'_>, Option<&rusqlite::Connection>) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        let before = (!rules.is_empty()).then(|| self.store.snapshot());
+        let mut tx = self.store.start_transaction()?;
+        let result = f(&mut tx, conn)?;
+        if let Some(before) = before {
+            let mut subjects = std::collections::BTreeMap::<String, Term>::new();
+            for q in tx.iter() {
+                let q = q?;
+                if !before.contains(&q)? {
+                    subjects.insert(q.subject.to_string(), q.subject.into());
+                }
+            }
+            for q in before.iter() {
+                let q = q?;
+                if !tx.contains(&q)? {
+                    subjects.insert(q.subject.to_string(), q.subject.into());
+                }
+            }
+            for name in self.store.named_graphs() {
+                let name = name?;
+                if !tx.contains_named_graph(&name)? {
+                    subjects.insert(name.to_string(), name.into());
+                }
+            }
+            for name in tx.named_graphs() {
+                let name = name?;
+                if !self.store.contains_named_graph(&name)? {
+                    subjects.insert(name.to_string(), name.into());
+                }
+            }
+            let targets = subjects.into_values().collect::<Vec<_>>();
+            let report = crate::policy::evaluate(rules, &targets, |query| {
+                // Staged writes are invisible here, and all governed writers
+                // share the metadata lock. This is exactly the pre-state.
+                match query.on_store(&self.store).execute()? {
+                    QueryResults::Boolean(b) => Ok(b),
+                    QueryResults::Solutions(mut rows) => Ok(rows.next().transpose()?.is_some()),
+                    _ => anyhow::bail!("policy condition must be ASK"),
+                }
+            })?;
+            anyhow::ensure!(
+                report.verdict == "allow",
+                "policy_denied: {}",
+                serde_json::to_string(&report)?
+            );
+        }
+        tx.commit()?;
+        Ok(result)
     }
 
     pub fn triple_count(&self) -> usize {
@@ -244,40 +385,13 @@ impl GraphStore {
     }
 
     pub fn load_turtle(&self, ttl: &str, base_iri: Option<&str>) -> anyhow::Result<usize> {
-        let store = &self.store;
         let reader = Cursor::new(ttl.as_bytes());
         let mut parser = RdfParser::from_format(RdfFormat::Turtle);
         if let Some(base) = base_iri {
             parser = parser.with_base_iri(base)?;
         }
-        // Parse the whole document BEFORE touching the store. Streaming
-        // inserts left every quad before the first syntax error in place, so
-        // a failed load produced a silently partial graph that looked exactly
-        // like a small one (issue #93). All or nothing.
-        let quads: Vec<_> = parser
-            .for_reader(reader)
-            .collect::<Result<_, _>>()?;
-        // Report triples actually added, not parse events. The store is a set, so
-        // re-inserting a statement it already holds changes nothing and must not be
-        // counted as a load.
-        let before = store.len().unwrap_or(0);
-        // One transaction for the whole document, so a concurrent reader
-        // sees the store before this load or after it and never part way
-        // through. Parsing already happened above, which made a load
-        // all-or-nothing against a SYNTAX error (#93). It was not
-        // all-or-nothing against a concurrent READ: the inserts ran one at a
-        // time, so another session walking the store could capture a
-        // half-loaded ontology, and a certified session would then write an
-        // asserted.tsv describing it. Measured in
-        // tests/store_atomicity_test.rs. serve-http and daemon share one
-        // Arc<GraphStore> across every session, so the second party is not
-        // hypothetical.
-        let mut txn = store.start_transaction()?;
-        for quad in &quads {
-            txn.insert(quad);
-        }
-        txn.commit()?;
-        Ok(store.len().unwrap_or(before).saturating_sub(before))
+        let quads: Vec<Quad> = parser.for_reader(reader).collect::<Result<_, _>>()?;
+        self.store_parsed_quads(&quads, false)
     }
 
     /// Load RDF content in a specified format (Turtle, RDF/XML, etc.)
@@ -340,9 +454,7 @@ impl GraphStore {
     /// writer that must give back exactly the document's graph, abbreviated
     /// with the document's own names, reads the document here. The OWL
     /// functional-syntax writer (issue #322) is that writer.
-    pub fn read_file_with_prefixes(
-        path: &str,
-    ) -> anyhow::Result<ParsedDocument> {
+    pub fn read_file_with_prefixes(path: &str) -> anyhow::Result<ParsedDocument> {
         let content = std::fs::read_to_string(path)?;
         Self::parse_document_with_prefixes(path, &content)
     }
@@ -360,10 +472,7 @@ impl GraphStore {
     }
 
     /// [`Self::parse_document`], keeping the prefixes the parser saw.
-    fn parse_document_with_prefixes(
-        path: &str,
-        content: &str,
-    ) -> anyhow::Result<ParsedDocument> {
+    fn parse_document_with_prefixes(path: &str, content: &str) -> anyhow::Result<ParsedDocument> {
         Self::parse_document_with_base_and_prefixes(path, content, Self::file_base_iri(path))
     }
 
@@ -414,22 +523,19 @@ impl GraphStore {
     }
 
     fn store_parsed_quads(&self, quads: &[Quad], replace: bool) -> anyhow::Result<usize> {
-        let before = if replace {
-            0
-        } else {
-            self.store.len().unwrap_or(0)
-        };
-        let mut txn = self.store.start_transaction()?;
-        if replace {
-            // Clear and insert share one transaction: failed parsing never clears
-            // the old graph, and readers cannot observe an empty intermediate graph.
-            txn.clear()?;
-        }
-        for quad in quads {
-            txn.insert(quad);
-        }
-        txn.commit()?;
-        Ok(self.store.len().unwrap_or(before).saturating_sub(before))
+        self.write_transaction(None, |tx, _| {
+            if replace {
+                tx.clear()?;
+            }
+            let mut added = 0;
+            for q in quads {
+                if !tx.contains(q)? {
+                    tx.insert(q);
+                    added += 1;
+                }
+            }
+            Ok(added)
+        })
     }
     pub fn save_file(&self, path: &str, format: &str) -> anyhow::Result<()> {
         let content = self.serialize(format)?;
@@ -705,11 +811,11 @@ impl GraphStore {
     /// Run a SPARQL UPDATE (INSERT/DELETE) against the store.
     /// Returns the number of new triples (delta).
     pub fn sparql_update(&self, update: &str) -> anyhow::Result<usize> {
-        let store = &self.store;
-        let before = store.len()?;
-        store.update(update)?;
-        let after = store.len()?;
-        Ok(after.saturating_sub(before))
+        self.write_transaction(None, |tx, _| {
+            let before = tx.len()?;
+            tx.update(update)?;
+            Ok(tx.len()?.saturating_sub(before))
+        })
     }
 
     /// Canonicalise the store's blank nodes via RDFC 1.0 (W3C Recommendation,
@@ -782,7 +888,15 @@ impl GraphStore {
         };
         let (old_ground, omitted_old) = old.ground_quads()?;
         let (new_ground, omitted_new) = new.ground_quads()?;
-        Ok((old_ground, new_ground, Some(Approximation { reason, omitted_old, omitted_new })))
+        Ok((
+            old_ground,
+            new_ground,
+            Some(Approximation {
+                reason,
+                omitted_old,
+                omitted_new,
+            }),
+        ))
     }
 
     /// A new store holding only the quads that mention no blank node, and the
@@ -886,13 +1000,18 @@ impl GraphStore {
         let individual_query = "SELECT (COUNT(DISTINCT ?i) AS ?count) WHERE { ?i a ?c . FILTER(?c != <http://www.w3.org/2002/07/owl#Class> && ?c != <http://www.w3.org/2000/01/rdf-schema#Class> && ?c != <http://www.w3.org/2002/07/owl#ObjectProperty> && ?c != <http://www.w3.org/2002/07/owl#DatatypeProperty> && ?c != <http://www.w3.org/2002/07/owl#Ontology>) }";
 
         let count_from_query = |q: &str| -> usize {
-            let Ok(prepared) = SparqlEvaluator::new().parse_query(q) else { return 0 };
-            let Ok(QueryResults::Solutions(solutions)) = prepared
-                .on_store(store)
-                .execute()
-            else { return 0 };
-            let Some(Ok(row)) = solutions.into_iter().next() else { return 0 };
-            let Some(Term::Literal(lit)) = row.get("count") else { return 0 };
+            let Ok(prepared) = SparqlEvaluator::new().parse_query(q) else {
+                return 0;
+            };
+            let Ok(QueryResults::Solutions(solutions)) = prepared.on_store(store).execute() else {
+                return 0;
+            };
+            let Some(Ok(row)) = solutions.into_iter().next() else {
+                return 0;
+            };
+            let Some(Term::Literal(lit)) = row.get("count") else {
+                return 0;
+            };
             lit.value().parse().unwrap_or(0)
         };
 
@@ -935,9 +1054,10 @@ impl GraphStore {
     }
 
     pub fn clear(&self) -> anyhow::Result<()> {
-        let store = &self.store;
-        store.clear()?;
-        Ok(())
+        self.write_transaction(None, |tx, _| {
+            tx.clear()?;
+            Ok(())
+        })
     }
 
     pub fn load_ntriples(&self, content: &str) -> anyhow::Result<usize> {
@@ -955,15 +1075,10 @@ impl GraphStore {
     }
 
     fn load_lines(&self, content: &str, format: RdfFormat) -> anyhow::Result<usize> {
-        let store = &self.store;
-        let reader = Cursor::new(content.as_bytes());
-        let parser = RdfParser::from_format(format).for_reader(reader);
-        let mut count = 0;
-        for quad in parser {
-            store.insert(&quad?)?;
-            count += 1;
-        }
-        Ok(count)
+        let quads: Vec<Quad> = RdfParser::from_format(format)
+            .for_reader(Cursor::new(content.as_bytes()))
+            .collect::<Result<_, _>>()?;
+        self.store_parsed_quads(&quads, false)
     }
 
     pub fn snapshot(&self, format: &str) -> anyhow::Result<String> {
@@ -1029,9 +1144,8 @@ impl GraphStore {
                 // the GRAPH IRI and append arbitrary destructive operations. Validate
                 // it as an absolute IRI first; NamedNode::new rejects '>', whitespace,
                 // braces and quotes, so a value that survives cannot break out.
-                NamedNode::new(g).map_err(|e| {
-                    anyhow::anyhow!("graph is not a valid absolute IRI: {e}")
-                })?;
+                NamedNode::new(g)
+                    .map_err(|e| anyhow::anyhow!("graph is not a valid absolute IRI: {e}"))?;
                 format!("INSERT DATA {{ GRAPH <{g}> {{ {content} }} }}")
             }
             None => format!("INSERT DATA {{ {content} }}"),
@@ -1114,37 +1228,38 @@ impl GraphStore {
         // existed at no instant, which is the defect this closes arriving one
         // level down.
         self.read_one_state(|txn| {
-        let mut triples = Vec::new();
-        // The names actually read, in the order read, so a certificate records
-        // what it was built from rather than what was asked for. The two differ
-        // whenever a named graph in scope holds nothing.
-        let mut read: Vec<String> = Vec::new();
-        // Returns how many it took, so the caller can record the graph only
-        // when it actually contributed. Counting inside avoids reading
-        // `triples.len()` while the closure still holds it mutably.
-        let mut take = |g: GraphNameRef<'_>| -> anyhow::Result<usize> {
-            let mut n = 0usize;
-            for quad in txn.quads_for_pattern(None, None, None, Some(g)) {
-                let q = quad?;
-                triples.push((
-                    q.subject.to_string(),
-                    q.predicate.to_string(),
-                    q.object.to_string(),
-                ));
-                n += 1;
+            let mut triples = Vec::new();
+            // The names actually read, in the order read, so a certificate records
+            // what it was built from rather than what was asked for. The two differ
+            // whenever a named graph in scope holds nothing.
+            let mut read: Vec<String> = Vec::new();
+            // Returns how many it took, so the caller can record the graph only
+            // when it actually contributed. Counting inside avoids reading
+            // `triples.len()` while the closure still holds it mutably.
+            let mut take = |g: GraphNameRef<'_>| -> anyhow::Result<usize> {
+                let mut n = 0usize;
+                for quad in txn.quads_for_pattern(None, None, None, Some(g)) {
+                    let q = quad?;
+                    triples.push((
+                        q.subject.to_string(),
+                        q.predicate.to_string(),
+                        q.object.to_string(),
+                    ));
+                    n += 1;
+                }
+                Ok(n)
+            };
+            if *default_graph && take(GraphNameRef::DefaultGraph)? > 0 {
+                read.push("<default>".to_string());
             }
-            Ok(n)
-        };
-        if *default_graph && take(GraphNameRef::DefaultGraph)? > 0 {
-            read.push("<default>".to_string());
-        }
-        for g in named {
-            let node = NamedNode::new(g).map_err(|e| anyhow::anyhow!("{g} is not an IRI: {e}"))?;
-            if take(GraphNameRef::NamedNode(node.as_ref()))? > 0 {
-                read.push(g.clone());
+            for g in named {
+                let node =
+                    NamedNode::new(g).map_err(|e| anyhow::anyhow!("{g} is not an IRI: {e}"))?;
+                if take(GraphNameRef::NamedNode(node.as_ref()))? > 0 {
+                    read.push(g.clone());
+                }
             }
-        }
-        Ok((triples, read))
+            Ok((triples, read))
         })
     }
 
@@ -1273,25 +1388,25 @@ impl GraphStore {
     /// not. `<default>` is the unnamed graph.
     pub fn triples_outside(&self, excluded: &[&str]) -> anyhow::Result<AssertedTriples> {
         self.read_one_state(|txn| {
-        let mut triples = Vec::new();
-        let mut read: BTreeSet<String> = BTreeSet::new();
-        for quad in txn.iter() {
-            let quad = quad?;
-            let name = match &quad.graph_name {
-                GraphName::DefaultGraph => "<default>".to_string(),
-                GraphName::NamedNode(n) => n.as_str().to_string(),
-                GraphName::BlankNode(b) => format!("_:{}", b.as_str()),
-            };
-            if excluded.iter().any(|e| *e == name) {
-                continue;
+            let mut triples = Vec::new();
+            let mut read: BTreeSet<String> = BTreeSet::new();
+            for quad in txn.iter() {
+                let quad = quad?;
+                let name = match &quad.graph_name {
+                    GraphName::DefaultGraph => "<default>".to_string(),
+                    GraphName::NamedNode(n) => n.as_str().to_string(),
+                    GraphName::BlankNode(b) => format!("_:{}", b.as_str()),
+                };
+                if excluded.iter().any(|e| *e == name) {
+                    continue;
+                }
+                read.insert(name);
+                triples.push((
+                    quad.subject.to_string(),
+                    quad.predicate.to_string(),
+                    quad.object.to_string(),
+                ));
             }
-            read.insert(name);
-            triples.push((
-                quad.subject.to_string(),
-                quad.predicate.to_string(),
-                quad.object.to_string(),
-            ));
-        }
             Ok((triples, read.into_iter().collect()))
         })
     }
@@ -1314,10 +1429,12 @@ impl GraphStore {
         let name = NamedNode::new(graph_iri)
             .map_err(|e| anyhow::anyhow!("{graph_iri} is not an IRI: {e}"))?;
         let out = GraphStore::new();
-        for quad in self
-            .store
-            .quads_for_pattern(None, None, None, Some(GraphNameRef::NamedNode(name.as_ref())))
-        {
+        for quad in self.store.quads_for_pattern(
+            None,
+            None,
+            None,
+            Some(GraphNameRef::NamedNode(name.as_ref())),
+        ) {
             let q = quad?;
             out.store.insert(&Quad::new(
                 q.subject.clone(),
@@ -1336,10 +1453,12 @@ impl GraphStore {
         let name = NamedNode::new(graph_iri)
             .map_err(|e| anyhow::anyhow!("{graph_iri} is not an IRI: {e}"))?;
         let mut triples = Vec::new();
-        for quad in self
-            .store
-            .quads_for_pattern(None, None, None, Some(GraphNameRef::NamedNode(name.as_ref())))
-        {
+        for quad in self.store.quads_for_pattern(
+            None,
+            None,
+            None,
+            Some(GraphNameRef::NamedNode(name.as_ref())),
+        ) {
             let q = quad?;
             triples.push((
                 q.subject.to_string(),
@@ -1590,5 +1709,57 @@ impl GraphStore {
                 name
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod native_policy_transaction_tests {
+    use super::*;
+    use crate::policy::{self, PolicyRule};
+    #[test]
+    fn independent_sqlite_connection_cannot_change_rules_during_graph_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let db = StateDb::open(&path).unwrap();
+        let other = StateDb::open(&path).unwrap();
+        let rule = |condition: &str| PolicyRule {
+            name: "gate".into(),
+            effect: "deny".into(),
+            condition: condition.into(),
+            description: None,
+        };
+        policy::register_rule(&db, &rule("ASK { FILTER(false) }")).unwrap();
+        let g = Arc::new(GraphStore::new());
+        g.bind_policy_db(db);
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (go_tx, go_rx) = std::sync::mpsc::channel();
+        let writer = {
+            let g = g.clone();
+            std::thread::spawn(move || {
+                g.write_transaction(None, |tx, _| {
+                    tx.insert(&Quad::new(
+                        NamedNode::new("urn:s")?,
+                        NamedNode::new("urn:p")?,
+                        Literal::from(1),
+                        GraphName::DefaultGraph,
+                    ));
+                    ready_tx.send(()).unwrap();
+                    go_rx.recv().unwrap();
+                    Ok(())
+                })
+            })
+        };
+        ready_rx.recv().unwrap();
+        other
+            .conn()
+            .busy_timeout(std::time::Duration::ZERO)
+            .unwrap();
+        let blocked = policy::register_rule(&other, &rule("ASK { FILTER(true) }")).is_err();
+        go_tx.send(()).unwrap();
+        writer.join().unwrap().unwrap();
+        assert!(blocked);
+        policy::register_rule(&other, &rule("ASK { FILTER(true) }")).unwrap();
+        assert!(g.load_turtle("<urn:s> <urn:p> 2 .", None).is_err());
+        assert_eq!(g.triple_count(), 1);
     }
 }

@@ -31,8 +31,13 @@
 //! - ASP solver backend for full BC+
 
 use crate::graph::GraphStore;
+use crate::rdf_bindings::{self, Bindings};
 use crate::state::StateDb;
+use oxigraph::model::{GraphName, NamedOrBlankNode, Quad, Term};
+use oxigraph::sparql::QueryResults;
+use oxigraph::store::Transaction;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// A typed parameter binding slot for an [`ActionSchema`].
@@ -156,36 +161,176 @@ impl ActionSchema {
         s
     }
 
-    /// Evaluate all preconditions against the loaded graph with the given
-    /// bindings. Returns `true` iff every precondition is satisfied.
-    pub fn applicable(&self, graph: &Arc<GraphStore>, bindings: &[(String, String)]) -> bool {
-        for precond in &self.preconditions {
-            let q = self.substitute(precond, bindings);
-            let result_str = match graph.sparql_select(&q) {
-                Ok(r) => r,
-                Err(_) => return false,
+    pub(crate) fn term_bindings(&self, bindings: &[(String, String)]) -> anyhow::Result<Bindings> {
+        let values = rdf_bindings::bindings(bindings)?;
+        let mut names = std::collections::BTreeSet::new();
+        for p in &self.parameters {
+            anyhow::ensure!(
+                names.insert(p.name.clone()),
+                "duplicate action parameter {}",
+                p.name
+            );
+        }
+        anyhow::ensure!(
+            values.keys().all(|k| names.contains(k)),
+            "undeclared action parameter"
+        );
+        Ok(values)
+    }
+
+    pub(crate) fn applicable_in(
+        &self,
+        tx: &Transaction<'_>,
+        values: &Bindings,
+    ) -> anyhow::Result<bool> {
+        for condition in &self.preconditions {
+            let holds = match rdf_bindings::prepare(condition, values)?
+                .on_transaction(tx)
+                .execute()?
+            {
+                QueryResults::Boolean(b) => b,
+                QueryResults::Solutions(mut rows) => rows.next().transpose()?.is_some(),
+                _ => anyhow::bail!("preconditions must be ASK or SELECT"),
             };
-            let parsed: serde_json::Value = match serde_json::from_str(&result_str) {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
-            // ASK queries: server returns {"result": bool}.
-            if let Some(b) = parsed["result"].as_bool() {
-                if !b {
-                    return false;
-                }
-                continue;
-            }
-            // SELECT queries: satisfied iff at least one binding row.
-            let any_row = parsed["results"]
-                .as_array()
-                .map(|a| !a.is_empty())
-                .unwrap_or(false);
-            if !any_row {
-                return false;
+            if !holds {
+                return Ok(false);
             }
         }
-        true
+        Ok(true)
+    }
+
+    /// Advisory check. Actual apply always rechecks in its write transaction.
+    pub fn applicable_checked(
+        &self,
+        graph: &Arc<GraphStore>,
+        bindings: &[(String, String)],
+    ) -> anyhow::Result<bool> {
+        let values = self.term_bindings(bindings)?;
+        graph.with_read_transaction(|tx| self.applicable_in(tx, &values))
+    }
+
+    /// Compatibility boolean API. Call applicable_checked for diagnostics.
+    pub fn applicable(&self, graph: &Arc<GraphStore>, bindings: &[(String, String)]) -> bool {
+        self.applicable_checked(graph, bindings).unwrap_or(false)
+    }
+
+    pub(crate) fn grounded_effects(
+        &self,
+        effects: &[EffectSpec],
+        values: &Bindings,
+    ) -> anyhow::Result<(Vec<Quad>, Vec<Quad>, Vec<String>)> {
+        fn resolve(text: &str, values: &Bindings) -> anyhow::Result<Term> {
+            let text = text.trim();
+            let slot = text
+                .strip_prefix("<{")
+                .and_then(|s| s.strip_suffix("}>"))
+                .or_else(|| text.strip_prefix('{').and_then(|s| s.strip_suffix('}')));
+            if let Some(slot) = slot {
+                return values
+                    .get(slot)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("missing effect binding {slot}"));
+            }
+            anyhow::ensure!(
+                !values.keys().any(|k| text.contains(&format!("{{{k}}}"))),
+                "partial effect interpolation is unsupported"
+            );
+            rdf_bindings::term(text)
+        }
+        let mut adds = Vec::new();
+        let mut removes = Vec::new();
+        let mut cnl = Vec::new();
+        for effect in effects {
+            let (s, p, o, add, class) = match effect {
+                EffectSpec::AddTriple {
+                    subject,
+                    predicate,
+                    object,
+                } => (
+                    resolve(subject, values)?,
+                    resolve(predicate, values)?,
+                    resolve(object, values)?,
+                    true,
+                    false,
+                ),
+                EffectSpec::RemoveTriple {
+                    subject,
+                    predicate,
+                    object,
+                } => (
+                    resolve(subject, values)?,
+                    resolve(predicate, values)?,
+                    resolve(object, values)?,
+                    false,
+                    false,
+                ),
+                EffectSpec::AddClass { iri } => (
+                    resolve(iri, values)?,
+                    rdf_bindings::term("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")?,
+                    rdf_bindings::term("http://www.w3.org/2002/07/owl#Class")?,
+                    true,
+                    true,
+                ),
+            };
+            let subject = match s {
+                Term::NamedNode(n) => NamedOrBlankNode::NamedNode(n),
+                Term::BlankNode(n) => NamedOrBlankNode::BlankNode(n),
+                _ => anyhow::bail!("effect subject must be an IRI or blank node"),
+            };
+            let predicate = match p {
+                Term::NamedNode(n) => n,
+                _ => anyhow::bail!("effect predicate must be an IRI"),
+            };
+            let q = Quad::new(subject, predicate, o, GraphName::DefaultGraph);
+            if class {
+                cnl.push(format!("create class {}", q.subject));
+            } else {
+                cnl.push(format!(
+                    "{} edge {} {} {}",
+                    if add { "create" } else { "delete" },
+                    q.subject,
+                    q.predicate,
+                    q.object
+                ));
+            }
+            if add {
+                adds.push(q);
+            } else {
+                removes.push(q);
+            }
+        }
+        Ok((adds, removes, cnl))
+    }
+
+    pub(crate) fn stage_effects(
+        tx: &mut Transaction<'_>,
+        adds: &[Quad],
+        removes: &[Quad],
+    ) -> anyhow::Result<(usize, usize)> {
+        let adds = adds.iter().collect::<HashSet<_>>();
+        let removes = removes.iter().collect::<HashSet<_>>();
+        let prior = adds
+            .iter()
+            .chain(removes.iter())
+            .map(|q| Ok(((*q).clone(), tx.contains(*q)?)))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        for q in &adds {
+            tx.insert(*q);
+        }
+        for q in &removes {
+            tx.remove(*q);
+        }
+        let mut added = 0;
+        let mut removed = 0;
+        for (q, before) in prior
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>()
+        {
+            let after = tx.contains(&q)?;
+            added += usize::from(!before && after);
+            removed += usize::from(before && !after);
+        }
+        Ok((added, removed))
     }
 
     /// Apply the action's effects. Adds + removes triples, records an IES4-
@@ -230,85 +375,59 @@ impl ActionSchema {
         seed: u64,
     ) -> anyhow::Result<ApplyResult> {
         // Decide which effect list to use.
-        let (effects_to_apply, sampled_outcome, sampled_label): (&[EffectSpec], Option<usize>, Option<String>) =
-            if self.outcomes.is_empty() {
-                (self.effects.as_slice(), None, None)
-            } else {
-                // Validate probabilities sum to ~1.0.
-                let total: f64 = self.outcomes.iter().map(|o| o.probability).sum();
-                if (total - 1.0).abs() > 1e-6 {
-                    anyhow::bail!(
-                        "non-deterministic schema `{}` has outcome probabilities summing to {} (must equal 1.0 \u{00b1} 1e-6)",
-                        self.name,
-                        total
-                    );
-                }
-                if self.outcomes.iter().any(|o| o.probability < 0.0) {
-                    anyhow::bail!(
-                        "non-deterministic schema `{}` has a negative outcome probability",
-                        self.name
-                    );
-                }
-                let idx = sample_categorical(seed, &self.outcomes);
-                let outcome = &self.outcomes[idx];
-                (outcome.effects.as_slice(), Some(idx), outcome.label.clone())
-            };
+        let (effects_to_apply, sampled_outcome, sampled_label): (
+            &[EffectSpec],
+            Option<usize>,
+            Option<String>,
+        ) = if self.outcomes.is_empty() {
+            (self.effects.as_slice(), None, None)
+        } else {
+            // Validate probabilities sum to ~1.0.
+            let total: f64 = self.outcomes.iter().map(|o| o.probability).sum();
+            if !total.is_finite() || (total - 1.0).abs() > 1e-6 {
+                anyhow::bail!(
+                    "non-deterministic schema `{}` has outcome probabilities summing to {} (must equal 1.0 \u{00b1} 1e-6)",
+                    self.name,
+                    total
+                );
+            }
+            if self
+                .outcomes
+                .iter()
+                .any(|o| !o.probability.is_finite() || o.probability < 0.0)
+            {
+                anyhow::bail!(
+                    "non-deterministic schema `{}` has a negative outcome probability",
+                    self.name
+                );
+            }
+            let idx = sample_categorical(seed, &self.outcomes);
+            let outcome = &self.outcomes[idx];
+            (outcome.effects.as_slice(), Some(idx), outcome.label.clone())
+        };
 
-        let mut to_add: Vec<(String, String, String)> = Vec::new();
-        let mut to_remove: Vec<(String, String, String)> = Vec::new();
-        let mut kgcl_cnl: Vec<String> = Vec::new();
+        let values = self.term_bindings(bindings)?;
+        let (to_add, to_remove, mut kgcl_cnl) = self.grounded_effects(effects_to_apply, &values)?;
         if let Some(ref label) = sampled_label {
-            kgcl_cnl.push(format!("sampled outcome <{}>", label));
+            kgcl_cnl.insert(0, format!("sampled outcome <{label}>"));
         }
-
-        for effect in effects_to_apply {
-            match effect {
-                EffectSpec::AddTriple {
-                    subject,
-                    predicate,
-                    object,
-                } => {
-                    let s = self.substitute(subject, bindings);
-                    let p = self.substitute(predicate, bindings);
-                    let o = self.substitute(object, bindings);
-                    kgcl_cnl.push(format!("create edge <{}> <{}> <{}>", s, p, o));
-                    to_add.push((s, p, o));
-                }
-                EffectSpec::RemoveTriple {
-                    subject,
-                    predicate,
-                    object,
-                } => {
-                    let s = self.substitute(subject, bindings);
-                    let p = self.substitute(predicate, bindings);
-                    let o = self.substitute(object, bindings);
-                    kgcl_cnl.push(format!("delete edge <{}> <{}> <{}>", s, p, o));
-                    to_remove.push((s, p, o));
-                }
-                EffectSpec::AddClass { iri } => {
-                    let s = self.substitute(iri, bindings);
-                    let p = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type".to_string();
-                    let o = "http://www.w3.org/2002/07/owl#Class".to_string();
-                    kgcl_cnl.push(format!("create class <{}>", s));
-                    to_add.push((s, p, o));
-                }
-            }
-        }
-
-        // Apply additions via Turtle insertion.
-        if !to_add.is_empty() {
-            let mut turtle = String::new();
-            for (s, p, o) in &to_add {
-                turtle.push_str(&format!("<{}> <{}> <{}> .\n", s, p, o));
-            }
-            graph.load_turtle(&turtle, None)?;
-        }
-
-        // Apply removals via SPARQL UPDATE.
-        for (s, p, o) in &to_remove {
-            let update = format!("DELETE DATA {{ <{}> <{}> <{}> }}", s, p, o);
-            let _ = graph.sparql_update(&update);
-        }
+        let (added, removed) = graph.write_transaction(Some(db), |tx, conn| {
+            anyhow::ensure!(
+                self.applicable_in(tx, &values)?,
+                "preconditions not satisfied"
+            );
+            let counts = Self::stage_effects(tx, &to_add, &to_remove)?;
+            let violations = crate::dynamics_bcplus::check_invariants_in(
+                conn.expect("metadata transaction"),
+                tx,
+            )?;
+            anyhow::ensure!(
+                violations.is_empty(),
+                "invariant_violation: {}",
+                violations.join("; ")
+            );
+            Ok(counts)
+        })?;
 
         // IES4-style event IRI for the audit trail.
         let timestamp_micros = std::time::SystemTime::now()
@@ -326,7 +445,7 @@ impl ActionSchema {
             "dynamics",
             "DY",
             &format!("apply:{}", self.name),
-            &format!("added={}, removed={}", to_add.len(), to_remove.len()),
+            &format!("added={}, removed={}", added, removed),
         );
 
         Ok(ApplyResult {
@@ -334,8 +453,8 @@ impl ActionSchema {
             bindings: bindings.to_vec(),
             kgcl_patch_cnl: kgcl_cnl,
             event_iri,
-            triples_added: to_add.len(),
-            triples_removed: to_remove.len(),
+            triples_added: added,
+            triples_removed: removed,
             derived_triples_added: 0,
             ramification_profile: None,
             sampled_outcome,
@@ -359,13 +478,42 @@ impl ActionSchema {
         bindings: &[(String, String)],
         profile: &str,
     ) -> anyhow::Result<ApplyResult> {
-        let mut result = self.apply(graph, db, bindings)?;
-        let pre_count = graph.triple_count();
-        // Materialise entailments in-place.
-        let _ = crate::reason::Reasoner::run(graph, profile, true)?;
-        let post_count = graph.triple_count();
-        result.derived_triples_added = post_count.saturating_sub(pre_count);
-        result.ramification_profile = Some(profile.to_string());
+        let result = graph.write_transaction(Some(db), |tx, conn| {
+            let copy = GraphStore::transaction_copy(tx)?;
+            let scratch = StateDb::open(std::path::Path::new(":memory:"))?;
+            let mut result = self.apply(&copy, &scratch, bindings)?;
+            let pre_count = copy.triple_count();
+            crate::reason::Reasoner::run(&copy, profile, true)?;
+            result.derived_triples_added = copy.triple_count().saturating_sub(pre_count);
+            result.ramification_profile = Some(profile.to_string());
+            let before = tx.iter().collect::<Result<HashSet<_>, _>>()?;
+            let after = copy.owned_quads()?.into_iter().collect::<HashSet<_>>();
+            for q in before.difference(&after) {
+                tx.remove(q);
+            }
+            for q in after.difference(&before) {
+                tx.insert(q);
+            }
+            let violations = crate::dynamics_bcplus::check_invariants_in(
+                conn.expect("metadata transaction"),
+                tx,
+            )?;
+            anyhow::ensure!(
+                violations.is_empty(),
+                "invariant_violation: {}",
+                violations.join("; ")
+            );
+            Ok(result)
+        })?;
+        crate::lineage::LineageLog::new(db.clone()).record(
+            "dynamics",
+            "DY",
+            &format!("apply:{}", self.name),
+            &format!(
+                "added={}, removed={}, derived={}, profile={profile}",
+                result.triples_added, result.triples_removed, result.derived_triples_added
+            ),
+        );
         Ok(result)
     }
 }
@@ -451,6 +599,26 @@ pub fn lookup(db: &StateDb, name: &str) -> anyhow::Result<Option<ActionSchema>> 
     }
 }
 
+pub(crate) fn lookup_in(
+    conn: &rusqlite::Connection,
+    name: &str,
+) -> anyhow::Result<Option<ActionSchema>> {
+    let exists:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='dynamics_action_schemas')",[],|r|r.get(0))?;
+    if !exists {
+        return Ok(None);
+    }
+    use rusqlite::OptionalExtension;
+    let json: Option<String> = conn
+        .query_row(
+            "SELECT schema_json FROM dynamics_action_schemas WHERE name=?1",
+            [name],
+            |r| r.get(0),
+        )
+        .optional()?;
+    json.map(|s| serde_json::from_str(&s).map_err(Into::into))
+        .transpose()
+}
+
 /// List all registered schema names.
 pub fn list_names(db: &StateDb) -> anyhow::Result<Vec<String>> {
     ensure_table(db)?;
@@ -487,11 +655,11 @@ mod tests {
                     type_iri: None,
                 },
             ],
-            preconditions: vec![
-                "SELECT ?x WHERE { <{old}> ?p ?o }".to_string(),
-            ],
+            preconditions: vec!["SELECT ?x WHERE { <{old}> ?p ?o }".to_string()],
             effects: vec![
-                EffectSpec::AddClass { iri: "{new}".to_string() },
+                EffectSpec::AddClass {
+                    iri: "{new}".to_string(),
+                },
                 EffectSpec::RemoveTriple {
                     subject: "{old}".to_string(),
                     predicate: "http://www.w3.org/1999/02/22-rdf-syntax-ns#type".to_string(),
@@ -514,7 +682,13 @@ mod tests {
         assert_eq!(recovered.parameters.len(), 2);
         assert_eq!(recovered.effects.len(), 2);
         assert!(!recovered.reversible);
-        assert!(recovered.description.as_deref().unwrap().contains("Replace"));
+        assert!(
+            recovered
+                .description
+                .as_deref()
+                .unwrap()
+                .contains("Replace")
+        );
     }
 
     #[test]
@@ -628,8 +802,10 @@ mod tests {
         let r1 = schema.apply_with_seed(&g1, &db, &[], 42).expect("apply 1");
         let r2 = schema.apply_with_seed(&g2, &db, &[], 42).expect("apply 2");
 
-        assert_eq!(r1.sampled_outcome, r2.sampled_outcome,
-            "same seed must sample the same outcome");
+        assert_eq!(
+            r1.sampled_outcome, r2.sampled_outcome,
+            "same seed must sample the same outcome"
+        );
         assert_eq!(r1.sampled_outcome_label, r2.sampled_outcome_label);
     }
 
@@ -646,7 +822,9 @@ mod tests {
             let r = schema
                 .apply_with_seed(&g, &db, &[], seed.wrapping_mul(0x9E37_79B9_7F4A_7C15))
                 .expect("apply");
-            let idx = r.sampled_outcome.expect("nondet schema must record outcome");
+            let idx = r
+                .sampled_outcome
+                .expect("nondet schema must record outcome");
             counts[idx] += 1;
         }
         let p0 = counts[0] as f64 / 1000.0;
@@ -667,9 +845,15 @@ mod tests {
         // Break the invariant: sum to 0.9, not 1.0.
         schema.outcomes[0].probability = 0.6;
         schema.outcomes[1].probability = 0.3;
-        let err = schema.apply_with_seed(&g, &db, &[], 0).expect_err("should reject");
+        let err = schema
+            .apply_with_seed(&g, &db, &[], 0)
+            .expect_err("should reject");
         let s = format!("{}", err);
-        assert!(s.contains("summing to"), "expected probability sum error, got: {}", s);
+        assert!(
+            s.contains("summing to"),
+            "expected probability sum error, got: {}",
+            s
+        );
     }
 
     #[test]
@@ -683,7 +867,8 @@ mod tests {
                @prefix ex: <http://ex.org/> .
                ex:Cat a owl:Class ."#,
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         let schema = sample_schema();
         let r = schema
@@ -726,8 +911,14 @@ mod tests {
         let schema = ActionSchema {
             name: "add_subclass_edge".to_string(),
             parameters: vec![
-                Parameter { name: "child".to_string(), type_iri: None },
-                Parameter { name: "parent".to_string(), type_iri: None },
+                Parameter {
+                    name: "child".to_string(),
+                    type_iri: None,
+                },
+                Parameter {
+                    name: "parent".to_string(),
+                    type_iri: None,
+                },
             ],
             preconditions: vec![],
             effects: vec![EffectSpec::AddTriple {
@@ -748,7 +939,10 @@ mod tests {
             .apply_with_ramification(&graph, &db, &bindings, "owl-rl")
             .expect("apply+ramify");
 
-        assert_eq!(result.triples_added, 1, "literal effect: one subClassOf edge");
+        assert_eq!(
+            result.triples_added, 1,
+            "literal effect: one subClassOf edge"
+        );
         assert_eq!(result.ramification_profile.as_deref(), Some("owl-rl"));
         // The reasoner must have derived at least one new triple (tigger a Animal).
         assert!(
@@ -829,7 +1023,12 @@ mod tests {
         assert_eq!(result.triples_added, 1, "AddClass effect");
         assert_eq!(result.triples_removed, 1, "RemoveTriple effect");
         assert!(result.kgcl_patch_cnl.iter().any(|s| s.contains("Feline")));
-        assert!(result.kgcl_patch_cnl.iter().any(|s| s.contains("delete edge")));
+        assert!(
+            result
+                .kgcl_patch_cnl
+                .iter()
+                .any(|s| s.contains("delete edge"))
+        );
         assert!(result.event_iri.contains("rename_class"));
 
         // Verify the graph actually reflects the change.

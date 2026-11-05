@@ -115,6 +115,7 @@ impl OpenOntologiesServer {
         tool_filter: crate::toolfilter::ToolFilter,
         ontology_dirs: Vec<std::path::PathBuf>,
     ) -> Self {
+        graph.bind_policy_db(db.clone());
         let lineage = crate::lineage::LineageLog::with_governance_webhook(db.clone(), governance_webhook.clone());
         let session_id = lineage.new_session();
 
@@ -2034,7 +2035,10 @@ impl OpenOntologiesServer {
             Err(e) => return Self::err_json(e),
         };
         let bindings: Vec<(String, String)> = input.bindings.into_iter().collect();
-        let applicable = schema.applicable(&self.graph, &bindings);
+        let applicable = match schema.applicable_checked(&self.graph, &bindings) {
+            Ok(b) => b,
+            Err(e) => return Self::err_json(e),
+        };
         let body = serde_json::json!({
             "applicable": applicable,
             "action_name": schema.name,
@@ -2044,7 +2048,7 @@ impl OpenOntologiesServer {
         body.to_string()
     }
 
-    #[tool(name = "onto_action_apply", description = "Apply a registered action's effects with the given parameter bindings. Returns the KGCL patch (CNL form), the IES4-style event IRI for the audit trail, and triples added/removed. Re-checks preconditions by default; set `check_preconditions=false` only after a successful `onto_certify_action` certificate. Optional ramification (#47): pass `ramify=\"rdfs\"|\"owl-rl\"|\"owl-rl-ext\"|\"owl-dl\"` to materialise downstream entailments after the literal effects land; the result includes `derived_triples_added` so callers can see what the reasoner produced. Pair with `onto_certify_action` for gated changes.")]
+    #[tool(name = "onto_action_apply", description = "Apply a registered action's effects with the given parameter bindings. Returns the KGCL patch (CNL form), the IES4-style event IRI for the audit trail, and triples added/removed. Always re-checks preconditions, policies and invariants inside the native write transaction; the legacy check_preconditions flag cannot bypass them. Optional ramification (#47): pass `ramify=\"rdfs\"|\"owl-rl\"|\"owl-rl-ext\"|\"owl-dl\"` to materialise downstream entailments after the literal effects land; the result includes `derived_triples_added` so callers can see what the reasoner produced. Pair with `onto_certify_action` for gated changes.")]
     async fn onto_action_apply(&self, Parameters(input): Parameters<OntoActionApplyInput>) -> String {
         let schema = match crate::dynamics::lookup(&self.db, &input.action_name) {
             Ok(Some(s)) => s,
@@ -2052,9 +2056,8 @@ impl OpenOntologiesServer {
             Err(e) => return Self::err_json(e),
         };
         let bindings: Vec<(String, String)> = input.bindings.into_iter().collect();
-        if input.check_preconditions && !schema.applicable(&self.graph, &bindings) {
-            return r#"{"error":"preconditions not satisfied"}"#.to_string();
-        }
+        // Preconditions are always checked inside the native write transaction;
+        // a client-side certificate or legacy flag cannot bypass changed state.
         let outcome = match (input.ramify.as_deref(), input.seed) {
             (Some(profile), _) if !profile.is_empty() => {
                 schema.apply_with_ramification(&self.graph, &self.db, &bindings, profile)
@@ -2073,7 +2076,7 @@ impl OpenOntologiesServer {
 
     // ── Full BC+ semantics (#43 follow-on) ──────────────────────────────
 
-    #[tool(name = "onto_action_apply_concurrent", description = "Fire a tick of concurrent BC+ actions atomically. All steps are pre-computed against the pre-tick state, conflict-checked (add-vs-remove of the same triple across distinct steps), then committed as a single batch. If any conflict OR any registered invariant fails post-commit, the entire tick is rolled back and NO step is applied. Non-deterministic schemas in a concurrent tick are rejected — pre-sample with `apply_with_seed` first.")]
+    #[tool(name = "onto_action_apply_concurrent", description = "Fire a tick of concurrent BC+ actions atomically. All steps are pre-computed against the pre-tick state, conflict-checked (add-vs-remove of the same triple across distinct steps), then committed as a single batch. If any conflict, policy or registered invariant fails, the staged tick is discarded before commit and NO step is applied. Non-deterministic schemas in a concurrent tick are rejected — pre-sample with `apply_with_seed` first.")]
     async fn onto_action_apply_concurrent(&self, Parameters(input): Parameters<OntoActionApplyConcurrentInput>) -> String {
         let steps: Vec<crate::dynamics_bcplus::ConcurrentStep> = input.steps.into_iter()
             .map(|s| crate::dynamics_bcplus::ConcurrentStep {
@@ -3577,6 +3580,28 @@ impl OpenOntologiesServer {
 #[tool_handler(router = self.tool_router)]
 #[prompt_handler(router = self.prompt_router)]
 impl ServerHandler for OpenOntologiesServer {
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        let mut result = self.tool_router.call(tcc).await?;
+        if result.content.len() == 1 && result.is_error != Some(true) {
+            let content = serde_json::to_value(&result.content[0]).ok();
+            if let Some(text) = content
+                .as_ref()
+                .and_then(|v| v.get("text"))
+                .and_then(|v| v.as_str())
+                && let Ok(serde_json::Value::Object(value)) = serde_json::from_str(text)
+                && value.get("error").is_some_and(|v| !v.is_null() && v != "")
+            {
+                result.is_error = Some(true);
+            }
+        }
+        Ok(result)
+    }
+
     /// The instructions string states the count it MEASURES.
     ///
     /// It used to state two, 114 and 112, neither of which was the number the

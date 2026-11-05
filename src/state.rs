@@ -448,6 +448,10 @@ impl StateDb {
         Ok(conn.query_row("PRAGMA user_version", [], |r| r.get(0))?)
     }
 
+    pub(crate) fn same_connection(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.conn, &other.conn)
+    }
+
     pub fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().unwrap()
     }

@@ -1486,9 +1486,8 @@ pub struct OntoActionApplyInput {
     pub action_name: String,
     /// Parameter bindings (same shape as in `onto_action_applicable`).
     pub bindings: std::collections::BTreeMap<String, String>,
-    /// If `true` (default), re-check preconditions before applying and abort
-    /// if they don't hold. Set `false` only if you have already certified the
-    /// action via `onto_certify_action`.
+    /// Legacy compatibility field. Preconditions are always checked inside
+    /// the native write transaction; false does not bypass a changed state.
     #[serde(default = "default_true")]
     pub check_preconditions: bool,
     /// Ramification (#47): if `Some(profile)`, run the reasoner after `apply`

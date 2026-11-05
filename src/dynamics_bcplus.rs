@@ -32,11 +32,11 @@
 //!   stable-model enumeration; deferred until #48 PyWhy ships the causal
 //!   estimation that would consume those distributions.
 
-use crate::dynamics::{lookup, ActionSchema, EffectSpec};
+use crate::dynamics::ActionSchema;
 use crate::graph::GraphStore;
 use crate::state::StateDb;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -84,139 +84,105 @@ pub fn apply_concurrent(
     graph: &Arc<GraphStore>,
     steps: &[ConcurrentStep],
 ) -> anyhow::Result<ConcurrentApplyResult> {
-    let mut planned_adds: Vec<BTreeSet<(String, String, String)>> = Vec::with_capacity(steps.len());
-    let mut planned_removes: Vec<BTreeSet<(String, String, String)>> = Vec::with_capacity(steps.len());
-
-    // ── Step 1: compute each action's effects against the pre-tick state.
-    for step in steps {
-        let schema: ActionSchema = lookup(db, &step.action_name)?
-            .ok_or_else(|| anyhow::anyhow!("unknown action: {}", step.action_name))?;
-        let bindings: Vec<(String, String)> = step
-            .bindings
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-
-        // Effects must come from `effects` directly (non-deterministic
-        // sampling in concurrent context is deferred — see module docstring).
-        if !schema.outcomes.is_empty() {
-            anyhow::bail!(
-                "non_deterministic_in_concurrent_tick: action `{}` has outcomes; not supported in concurrent ticks. \
-                 Pre-sample with apply_with_seed and pass an `effects`-shaped schema instead.",
+    let outcome = graph.write_transaction(Some(db), |tx, conn| {
+        let conn = conn.expect("metadata transaction");
+        let mut planned_adds = Vec::new();
+        let mut planned_removes = Vec::new();
+        for step in steps {
+            let schema = crate::dynamics::lookup_in(conn, &step.action_name)?
+                .ok_or_else(|| anyhow::anyhow!("unknown action: {}", step.action_name))?;
+            anyhow::ensure!(
+                schema.outcomes.is_empty(),
+                "non_deterministic_in_concurrent_tick: stochastic outcomes are unsupported"
+            );
+            let values = schema.term_bindings(
+                &step
+                    .bindings
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<Vec<_>>(),
+            )?;
+            anyhow::ensure!(
+                schema.applicable_in(tx, &values)?,
+                "preconditions not satisfied: {}",
                 step.action_name
             );
+            let (adds, removes, _) = schema.grounded_effects(&schema.effects, &values)?;
+            planned_adds.push(adds);
+            planned_removes.push(removes);
         }
-        let mut adds = BTreeSet::new();
-        let mut removes = BTreeSet::new();
-        for effect in &schema.effects {
-            let triple = match effect {
-                EffectSpec::AddTriple { subject, predicate, object } => {
-                    let s = schema.substitute(subject, &bindings);
-                    let p = schema.substitute(predicate, &bindings);
-                    let o = schema.substitute(object, &bindings);
-                    adds.insert((s, p, o));
-                    continue;
+        let mut conflicts = Vec::new();
+        for (i, adds) in planned_adds.iter().enumerate() {
+            for (j, removes) in planned_removes.iter().enumerate() {
+                if i != j {
+                    for q in adds {
+                        if removes.contains(q) {
+                            conflicts.push(ConflictReport {
+                                triple: (
+                                    q.subject.to_string(),
+                                    q.predicate.to_string(),
+                                    q.object.to_string(),
+                                ),
+                                adding_step: i,
+                                removing_step: j,
+                                reason: "concurrent add/remove of the same triple".into(),
+                            });
+                        }
+                    }
                 }
-                EffectSpec::RemoveTriple { subject, predicate, object } => {
-                    let s = schema.substitute(subject, &bindings);
-                    let p = schema.substitute(predicate, &bindings);
-                    let o = schema.substitute(object, &bindings);
-                    removes.insert((s, p, o));
-                    continue;
-                }
-                EffectSpec::AddClass { iri } => {
-                    let s = schema.substitute(iri, &bindings);
-                    (
-                        s,
-                        "http://www.w3.org/1999/02/22-rdf-syntax-ns#type".to_string(),
-                        "http://www.w3.org/2002/07/owl#Class".to_string(),
-                    )
-                }
-            };
-            adds.insert(triple);
-        }
-        planned_adds.push(adds);
-        planned_removes.push(removes);
-    }
-
-    // ── Step 2: detect conflicts (add ∩ remove across distinct steps).
-    let mut conflicts: Vec<ConflictReport> = Vec::new();
-    for (i, adds) in planned_adds.iter().enumerate() {
-        for (j, removes) in planned_removes.iter().enumerate() {
-            if i == j {
-                continue;
-            }
-            for t in adds.intersection(removes) {
-                conflicts.push(ConflictReport {
-                    triple: t.clone(),
-                    adding_step: i,
-                    removing_step: j,
-                    reason: "concurrent add/remove of the same triple".to_string(),
-                });
             }
         }
-    }
-    if !conflicts.is_empty() {
-        return Ok(ConcurrentApplyResult {
+        if !conflicts.is_empty() {
+            return Ok(ConcurrentApplyResult {
+                steps_total: steps.len(),
+                steps_applied: 0,
+                conflicts,
+                triples_added: 0,
+                triples_removed: 0,
+                invariant_violations: Vec::new(),
+            });
+        }
+        let adds = planned_adds.into_iter().flatten().collect::<Vec<_>>();
+        let removes = planned_removes.into_iter().flatten().collect::<Vec<_>>();
+        let (added, removed) = ActionSchema::stage_effects(tx, &adds, &removes)?;
+        let violations = check_invariants_in(conn, tx)?;
+        if !violations.is_empty() {
+            return Err(TickRejected(ConcurrentApplyResult {
+                steps_total: steps.len(),
+                steps_applied: 0,
+                conflicts: Vec::new(),
+                triples_added: 0,
+                triples_removed: 0,
+                invariant_violations: violations,
+            })
+            .into());
+        }
+        Ok(ConcurrentApplyResult {
             steps_total: steps.len(),
-            steps_applied: 0,
-            conflicts,
-            triples_added: 0,
-            triples_removed: 0,
-            invariant_violations: Vec::new(),
-        });
-    }
-
-    // ── Step 3: commit. Union of all adds, union of all removes.
-    let all_adds: BTreeSet<(String, String, String)> = planned_adds.iter().flatten().cloned().collect();
-    let all_removes: BTreeSet<(String, String, String)> = planned_removes.iter().flatten().cloned().collect();
-
-    if !all_adds.is_empty() {
-        let mut ttl = String::new();
-        for (s, p, o) in &all_adds {
-            ttl.push_str(&format!("<{}> <{}> <{}> .\n", s, p, o));
-        }
-        graph.load_turtle(&ttl, None)?;
-    }
-    for (s, p, o) in &all_removes {
-        let update = format!("DELETE DATA {{ <{}> <{}> <{}> }}", s, p, o);
-        let _ = graph.sparql_update(&update);
-    }
-
-    // ── Step 4: invariants.
-    let violations = check_invariants(db, graph)?;
-    if !violations.is_empty() {
-        // Rollback: re-add removes, remove adds.
-        if !all_removes.is_empty() {
-            let mut ttl = String::new();
-            for (s, p, o) in &all_removes {
-                ttl.push_str(&format!("<{}> <{}> <{}> .\n", s, p, o));
-            }
-            graph.load_turtle(&ttl, None)?;
-        }
-        for (s, p, o) in &all_adds {
-            let update = format!("DELETE DATA {{ <{}> <{}> <{}> }}", s, p, o);
-            let _ = graph.sparql_update(&update);
-        }
-        return Ok(ConcurrentApplyResult {
-            steps_total: steps.len(),
-            steps_applied: 0,
+            steps_applied: steps.len(),
             conflicts: Vec::new(),
-            triples_added: 0,
-            triples_removed: 0,
-            invariant_violations: violations,
-        });
+            triples_added: added,
+            triples_removed: removed,
+            invariant_violations: Vec::new(),
+        })
+    });
+    match outcome {
+        Ok(report) => Ok(report),
+        Err(e) => match e.downcast::<TickRejected>() {
+            Ok(rejected) => Ok(rejected.0),
+            Err(e) => Err(e),
+        },
     }
-
-    Ok(ConcurrentApplyResult {
-        steps_total: steps.len(),
-        steps_applied: steps.len(),
-        conflicts: Vec::new(),
-        triples_added: all_adds.len(),
-        triples_removed: all_removes.len(),
-        invariant_violations: Vec::new(),
-    })
 }
+
+#[derive(Debug)]
+struct TickRejected(ConcurrentApplyResult);
+impl std::fmt::Display for TickRejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "concurrent tick rejected by invariants")
+    }
+}
+impl std::error::Error for TickRejected {}
 
 // ─── Static causal laws (invariants) ────────────────────────────────────────
 
@@ -259,9 +225,8 @@ pub fn register_invariant(db: &StateDb, law: &StaticCausalLaw) -> anyhow::Result
 pub fn list_invariants(db: &StateDb) -> anyhow::Result<Vec<StaticCausalLaw>> {
     ensure_laws_table(db)?;
     let conn = db.conn();
-    let mut stmt = conn.prepare(
-        "SELECT name, ask_query, description FROM bcplus_static_laws ORDER BY name",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT name, ask_query, description FROM bcplus_static_laws ORDER BY name")?;
     let rows: Vec<StaticCausalLaw> = stmt
         .query_map([], |r| {
             Ok(StaticCausalLaw {
@@ -313,6 +278,45 @@ pub fn check_invariants(db: &StateDb, graph: &Arc<GraphStore>) -> anyhow::Result
     Ok(violations)
 }
 
+pub(crate) fn check_invariants_in(
+    conn: &rusqlite::Connection,
+    tx: &oxigraph::store::Transaction<'_>,
+) -> anyhow::Result<Vec<String>> {
+    let exists:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='bcplus_static_laws')",[],|r|r.get(0))?;
+    if !exists {
+        return Ok(Vec::new());
+    }
+    let mut stmt =
+        conn.prepare("SELECT name,ask_query,description FROM bcplus_static_laws ORDER BY name")?;
+    let laws = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut violations = Vec::new();
+    for (name, q, description) in laws {
+        let q = match crate::rdf_bindings::query_head(&q) {
+            Ok(h) if h.text.eq_ignore_ascii_case("ASK") => q,
+            _ => format!("ASK {{ {q} }}"),
+        };
+        match crate::rdf_bindings::prepare(&q, &Default::default())?
+            .on_transaction(tx)
+            .execute()?
+        {
+            oxigraph::sparql::QueryResults::Boolean(true) => {}
+            oxigraph::sparql::QueryResults::Boolean(false) => {
+                violations.push(format!("{name}: {}", description.unwrap_or_default()))
+            }
+            _ => anyhow::bail!("invariant must be ASK: {name}"),
+        }
+    }
+    Ok(violations)
+}
+
 // ─── Default values ─────────────────────────────────────────────────────────
 
 /// A caused-by-default fact: when `condition_ask` holds, ensure each triple
@@ -355,9 +359,7 @@ pub fn register_default(db: &StateDb, law: &DefaultLaw) -> anyhow::Result<()> {
 pub fn list_defaults(db: &StateDb) -> anyhow::Result<Vec<DefaultLaw>> {
     ensure_defaults_table(db)?;
     let conn = db.conn();
-    let mut stmt = conn.prepare(
-        "SELECT law_json FROM bcplus_default_laws ORDER BY name",
-    )?;
+    let mut stmt = conn.prepare("SELECT law_json FROM bcplus_default_laws ORDER BY name")?;
     let rows: Vec<DefaultLaw> = stmt
         .query_map([], |r| r.get::<_, String>(0))?
         .filter_map(|r| r.ok().and_then(|s| serde_json::from_str(&s).ok()))
@@ -404,7 +406,10 @@ pub fn apply_defaults(
             }
         }
     }
-    Ok(DefaultsApplyResult { laws_fired: fired, triples_added: added })
+    Ok(DefaultsApplyResult {
+        laws_fired: fired,
+        triples_added: added,
+    })
 }
 
 /// Outcome of [`apply_defaults`].
@@ -422,7 +427,7 @@ fn in_memory_db() -> anyhow::Result<StateDb> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dynamics::{register, ActionSchema, EffectSpec, Parameter};
+    use crate::dynamics::{ActionSchema, EffectSpec, Parameter, register};
 
     fn fresh_db() -> StateDb {
         StateDb::open(Path::new(":memory:")).unwrap()
@@ -447,9 +452,14 @@ mod tests {
     fn add_class_schema() -> ActionSchema {
         ActionSchema {
             name: "add_class".to_string(),
-            parameters: vec![Parameter { name: "iri".to_string(), type_iri: None }],
+            parameters: vec![Parameter {
+                name: "iri".to_string(),
+                type_iri: None,
+            }],
             preconditions: vec![],
-            effects: vec![EffectSpec::AddClass { iri: "{iri}".to_string() }],
+            effects: vec![EffectSpec::AddClass {
+                iri: "{iri}".to_string(),
+            }],
             reversible: true,
             description: None,
             outcomes: vec![],
@@ -470,8 +480,14 @@ mod tests {
             &db,
             &graph,
             &[
-                ConcurrentStep { action_name: "add_class".to_string(), bindings: b1 },
-                ConcurrentStep { action_name: "add_class".to_string(), bindings: b2 },
+                ConcurrentStep {
+                    action_name: "add_class".to_string(),
+                    bindings: b1,
+                },
+                ConcurrentStep {
+                    action_name: "add_class".to_string(),
+                    bindings: b2,
+                },
             ],
         )
         .unwrap();
@@ -480,7 +496,10 @@ mod tests {
         assert!(result.triples_added >= 2);
         // Both classes must now be declared.
         for iri in ["http://ex.org/Fish", "http://ex.org/Reptile"] {
-            let q = format!("ASK {{ <{}> a <http://www.w3.org/2002/07/owl#Class> }}", iri);
+            let q = format!(
+                "ASK {{ <{}> a <http://www.w3.org/2002/07/owl#Class> }}",
+                iri
+            );
             let r = graph.sparql_select(&q).unwrap();
             assert!(r.contains("\"result\":true"), "missing: {}", iri);
         }
@@ -525,8 +544,14 @@ mod tests {
             &db,
             &graph,
             &[
-                ConcurrentStep { action_name: "add_t".to_string(), bindings: BTreeMap::new() },
-                ConcurrentStep { action_name: "remove_t".to_string(), bindings: BTreeMap::new() },
+                ConcurrentStep {
+                    action_name: "add_t".to_string(),
+                    bindings: BTreeMap::new(),
+                },
+                ConcurrentStep {
+                    action_name: "remove_t".to_string(),
+                    bindings: BTreeMap::new(),
+                },
             ],
         )
         .unwrap();
@@ -551,12 +576,16 @@ mod tests {
             outcomes: vec![
                 crate::dynamics::Outcome {
                     probability: 0.5,
-                    effects: vec![EffectSpec::AddClass { iri: "http://ex.org/A".to_string() }],
+                    effects: vec![EffectSpec::AddClass {
+                        iri: "http://ex.org/A".to_string(),
+                    }],
                     label: Some("a".to_string()),
                 },
                 crate::dynamics::Outcome {
                     probability: 0.5,
-                    effects: vec![EffectSpec::AddClass { iri: "http://ex.org/B".to_string() }],
+                    effects: vec![EffectSpec::AddClass {
+                        iri: "http://ex.org/B".to_string(),
+                    }],
                     label: Some("b".to_string()),
                 },
             ],
@@ -565,7 +594,10 @@ mod tests {
         let err = apply_concurrent(
             &db,
             &graph,
-            &[ConcurrentStep { action_name: "noisy".to_string(), bindings: BTreeMap::new() }],
+            &[ConcurrentStep {
+                action_name: "noisy".to_string(),
+                bindings: BTreeMap::new(),
+            }],
         )
         .expect_err("should reject");
         assert!(format!("{}", err).contains("non_deterministic_in_concurrent_tick"));
@@ -602,7 +634,8 @@ mod tests {
             &db,
             &StaticCausalLaw {
                 name: "cat_must_exist".to_string(),
-                ask_query: "ASK { <http://ex.org/Cat> a <http://www.w3.org/2002/07/owl#Class> }".into(),
+                ask_query: "ASK { <http://ex.org/Cat> a <http://www.w3.org/2002/07/owl#Class> }"
+                    .into(),
                 description: None,
             },
         )
@@ -627,7 +660,10 @@ mod tests {
         let result = apply_concurrent(
             &db,
             &graph,
-            &[ConcurrentStep { action_name: "remove_cat".to_string(), bindings: BTreeMap::new() }],
+            &[ConcurrentStep {
+                action_name: "remove_cat".to_string(),
+                bindings: BTreeMap::new(),
+            }],
         )
         .unwrap();
         assert_eq!(result.steps_applied, 0);
@@ -643,8 +679,8 @@ mod tests {
         // Default: when ex:Cat is a class, assert that Cat has a default label.
         let law = DefaultLaw {
             name: "cat_default_label".to_string(),
-            condition_ask:
-                "ASK { <http://ex.org/Cat> a <http://www.w3.org/2002/07/owl#Class> }".into(),
+            condition_ask: "ASK { <http://ex.org/Cat> a <http://www.w3.org/2002/07/owl#Class> }"
+                .into(),
             defaults: vec![(
                 "http://ex.org/Cat".into(),
                 "http://www.w3.org/2000/01/rdf-schema#label".into(),
@@ -669,8 +705,8 @@ mod tests {
         let law = DefaultLaw {
             name: "fish_default_label".to_string(),
             // ex:Fish is NOT in the seed graph.
-            condition_ask:
-                "ASK { <http://ex.org/Fish> a <http://www.w3.org/2002/07/owl#Class> }".into(),
+            condition_ask: "ASK { <http://ex.org/Fish> a <http://www.w3.org/2002/07/owl#Class> }"
+                .into(),
             defaults: vec![(
                 "http://ex.org/Fish".into(),
                 "http://www.w3.org/2000/01/rdf-schema#label".into(),

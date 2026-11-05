@@ -17,7 +17,10 @@
 //! handles statistical risk, ARGOS handles authorisation.
 
 use crate::graph::GraphStore;
+use crate::rdf_bindings::{self, Bindings};
 use crate::state::StateDb;
+use oxigraph::model::Term;
+use oxigraph::sparql::{PreparedSparqlQuery, QueryResults};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -36,8 +39,8 @@ pub struct PolicyRule {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PolicyReport {
-    /// Overall verdict: `"allow"` iff at least one `allow` rule fires for
-    /// every target AND no `deny` rule fires for any target.
+    /// Deny overrides; allow only when every rule evaluated successfully and
+    /// no deny rule fired. Errors are returned as Err, never as allow.
     pub verdict: String,
     pub rule_results: Vec<RuleResult>,
 }
@@ -76,13 +79,19 @@ pub fn register_rule(db: &StateDb, rule: &PolicyRule) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn list_rules(db: &StateDb) -> anyhow::Result<Vec<PolicyRule>> {
-    ensure(db)?;
-    let conn = db.conn();
-    let mut stmt = conn.prepare(
-        "SELECT name, effect, condition, description FROM policy_rules ORDER BY name",
+/// Read a policy snapshot without creating a table or hiding corrupt rows.
+pub(crate) fn read_rules(conn: &rusqlite::Connection) -> anyhow::Result<Vec<PolicyRule>> {
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='policy_rules')",
+        [],
+        |r| r.get(0),
     )?;
-    let rows: Vec<PolicyRule> = stmt
+    if !exists {
+        return Ok(Vec::new());
+    }
+    let mut stmt =
+        conn.prepare("SELECT name,effect,condition,description FROM policy_rules ORDER BY name")?;
+    Ok(stmt
         .query_map([], |r| {
             Ok(PolicyRule {
                 name: r.get(0)?,
@@ -91,9 +100,80 @@ pub fn list_rules(db: &StateDb) -> anyhow::Result<Vec<PolicyRule>> {
                 description: r.get(3)?,
             })
         })?
-        .filter_map(Result::ok)
-        .collect();
-    Ok(rows)
+        .collect::<Result<Vec<_>, _>>()?)
+}
+
+pub fn list_rules(db: &StateDb) -> anyhow::Result<Vec<PolicyRule>> {
+    read_rules(&db.conn())
+}
+
+/// Evaluate rules with a caller-selected consistent RDF view. Bindings are
+/// parsed RDF terms and query failures abort the complete decision.
+pub(crate) fn evaluate(
+    rules: &[PolicyRule],
+    targets: &[Term],
+    mut ask: impl FnMut(PreparedSparqlQuery) -> anyhow::Result<bool>,
+) -> anyhow::Result<PolicyReport> {
+    let mut results = Vec::new();
+    let mut denied = false;
+    for rule in rules {
+        anyhow::ensure!(
+            matches!(rule.effect.as_str(), "allow" | "deny"),
+            "invalid policy effect for {}",
+            rule.name
+        );
+        for target in targets {
+            let values = Bindings::from([("target".into(), target.clone())]);
+            let condition = match rdf_bindings::query_head(&rule.condition) {
+                Ok(h) if h.text.eq_ignore_ascii_case("ASK") => rule.condition.clone(),
+                Ok(h)
+                    if ["SELECT", "CONSTRUCT", "DESCRIBE"]
+                        .iter()
+                        .any(|q| h.text.eq_ignore_ascii_case(q)) =>
+                {
+                    anyhow::bail!("policy condition must be ASK")
+                }
+                _ => format!("ASK {{ {} }}", rule.condition),
+            };
+            rdf_bindings::local_condition(&condition)?;
+            let prepared = if matches!(target, Term::BlankNode(_)) {
+                // SPARQL blank-node syntax denotes an existential variable,
+                // not a stored node identity. Project a substituted variable.
+                let text = rdf_bindings::render(&condition, &values, true)?;
+                if text.contains("?__oo_bound_0") {
+                    let head = rdf_bindings::query_head(&text)?;
+                    let text = format!(
+                        "{} SELECT ?__oo_bound_0 {}",
+                        &text[..head.start],
+                        &text[head.end..]
+                    );
+                    oxigraph::sparql::SparqlEvaluator::new()
+                        .parse_query(&text)?
+                        .substitute_variable(
+                            oxigraph::model::Variable::new("__oo_bound_0")?,
+                            target.clone(),
+                        )
+                } else {
+                    oxigraph::sparql::SparqlEvaluator::new().parse_query(&text)?
+                }
+            } else {
+                rdf_bindings::prepare(&condition, &values)?
+            };
+            let fired = ask(prepared)
+                .map_err(|e| anyhow::anyhow!("policy {} could not be evaluated: {e}", rule.name))?;
+            denied |= fired && rule.effect == "deny";
+            results.push(RuleResult {
+                rule_name: rule.name.clone(),
+                target: target.to_string(),
+                effect: rule.effect.clone(),
+                fired,
+            });
+        }
+    }
+    Ok(PolicyReport {
+        verdict: if denied { "deny" } else { "allow" }.into(),
+        rule_results: results,
+    })
 }
 
 /// Check a proposed action against every registered policy rule.
@@ -109,34 +189,23 @@ pub fn check_action(
     graph: &Arc<GraphStore>,
     target_iris: &[String],
 ) -> anyhow::Result<PolicyReport> {
-    let rules = list_rules(db)?;
-    let mut results: Vec<RuleResult> = Vec::new();
-    let mut any_deny = false;
-    for rule in &rules {
-        for t in target_iris {
-            let q = rule.condition.replace("{target}", t);
-            let q = if q.trim().to_uppercase().starts_with("ASK") {
-                q
-            } else {
-                format!("ASK {{ {} }}", q)
-            };
-            let fired = match graph.sparql_select(&q) {
-                Ok(s) => s.contains("\"result\":true"),
-                Err(_) => false,
-            };
-            if fired && rule.effect == "deny" {
-                any_deny = true;
+    anyhow::ensure!(!target_iris.is_empty(), "target_iris must not be empty");
+    let targets = target_iris
+        .iter()
+        .map(|t| rdf_bindings::iri(t).map(Term::from))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let mut conn = db.conn();
+    let metadata = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let rules = read_rules(&metadata)?;
+    graph.with_read_transaction(|tx| {
+        evaluate(&rules, &targets, |query| {
+            match query.on_transaction(tx).execute()? {
+                QueryResults::Boolean(b) => Ok(b),
+                QueryResults::Solutions(mut rows) => Ok(rows.next().transpose()?.is_some()),
+                _ => anyhow::bail!("policy condition must be ASK"),
             }
-            results.push(RuleResult {
-                rule_name: rule.name.clone(),
-                target: t.clone(),
-                effect: rule.effect.clone(),
-                fired,
-            });
-        }
-    }
-    let verdict = if any_deny { "deny" } else { "allow" }.to_string();
-    Ok(PolicyReport { verdict, rule_results: results })
+        })
+    })
 }
 
 #[cfg(test)]
@@ -173,17 +242,21 @@ mod tests {
             &PolicyRule {
                 name: "deny_locked".to_string(),
                 effect: "deny".to_string(),
-                condition:
-                    "ASK { <{target}> <http://example.org/audit#locked> \"yes\" }".to_string(),
+                condition: "ASK { <{target}> <http://example.org/audit#locked> \"yes\" }"
+                    .to_string(),
                 description: None,
             },
         )
         .unwrap();
-        let report =
-            check_action(&db, &g, &["http://ex.org/Free".to_string()]).unwrap();
+        let report = check_action(&db, &g, &["http://ex.org/Free".to_string()]).unwrap();
         assert_eq!(report.verdict, "allow");
         // The deny rule did NOT fire for Free.
-        assert!(report.rule_results.iter().any(|r| r.rule_name == "deny_locked" && !r.fired));
+        assert!(
+            report
+                .rule_results
+                .iter()
+                .any(|r| r.rule_name == "deny_locked" && !r.fired)
+        );
     }
 
     #[test]
@@ -195,16 +268,20 @@ mod tests {
             &PolicyRule {
                 name: "deny_locked".to_string(),
                 effect: "deny".to_string(),
-                condition:
-                    "ASK { <{target}> <http://example.org/audit#locked> \"yes\" }".to_string(),
+                condition: "ASK { <{target}> <http://example.org/audit#locked> \"yes\" }"
+                    .to_string(),
                 description: None,
             },
         )
         .unwrap();
-        let report =
-            check_action(&db, &g, &["http://ex.org/Critical".to_string()]).unwrap();
+        let report = check_action(&db, &g, &["http://ex.org/Critical".to_string()]).unwrap();
         assert_eq!(report.verdict, "deny");
-        assert!(report.rule_results.iter().any(|r| r.fired && r.effect == "deny"));
+        assert!(
+            report
+                .rule_results
+                .iter()
+                .any(|r| r.fired && r.effect == "deny")
+        );
     }
 
     #[test]
@@ -227,8 +304,7 @@ mod tests {
     fn check_action_with_no_rules_returns_allow() {
         let db = fresh_db();
         let g = graph_with_lock();
-        let report =
-            check_action(&db, &g, &["http://ex.org/Free".to_string()]).unwrap();
+        let report = check_action(&db, &g, &["http://ex.org/Free".to_string()]).unwrap();
         assert_eq!(report.verdict, "allow");
         assert!(report.rule_results.is_empty());
     }
@@ -243,8 +319,7 @@ mod tests {
             &PolicyRule {
                 name: "self_loop_deny".to_string(),
                 effect: "deny".to_string(),
-                condition:
-                    "ASK { <{target}> ?p <{target}> }".to_string(),
+                condition: "ASK { <{target}> ?p <{target}> }".to_string(),
                 description: None,
             },
         )

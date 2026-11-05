@@ -47,6 +47,7 @@ pub mod support;
 pub mod temporal;
 pub mod trace_label;
 pub mod policy;
+pub mod rdf_bindings;
 /// Certified verdicts that cannot be spelled without the evidence. Every
 /// module that prints a verdict word takes its vocabulary from here.
 pub mod verdict;
