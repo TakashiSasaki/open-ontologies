@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Fabio Rovai
 // SPDX-License-Identifier: MIT
 
+/// Upstream version with explicit fork-build provenance.
+pub const BUILD_VERSION: &str = env!("OPEN_ONTOLOGIES_BUILD_VERSION");
+
 pub mod align;
 pub mod align_fuzzy;
 pub mod batch;

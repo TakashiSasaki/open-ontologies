@@ -27,6 +27,7 @@ categories = ["command-line-utilities", "data-structures", "science"]
 include = [
     "/src/**/*.rs",
     "/Cargo.toml",
+    "/build.rs",
     "/README.md",
     "/LICENSE",
     "/CHANGELOG.md",

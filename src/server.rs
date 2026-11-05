@@ -269,7 +269,7 @@ impl OpenOntologiesServer {
     pub fn status_json(&self) -> String {
         serde_json::json!({
             "status": "ok",
-            "version": env!("CARGO_PKG_VERSION"),
+            "version": crate::BUILD_VERSION,
             "tools": self.tool_router.list_all().len(),
             "triples_loaded": self.graph.triple_count(),
             // Always present and always naming the profile, even under `full`.
@@ -3638,6 +3638,7 @@ impl ServerHandler for OpenOntologiesServer {
             String::new()
         };
         ServerInfo::new(ServerCapabilities::builder().enable_tools().enable_prompts().build())
+            .with_server_info(rmcp::model::Implementation::new("open-ontologies", crate::BUILD_VERSION))
             .with_instructions(format!(
                 "Open Ontologies: AI-native ontology engine, an RDF/OWL/SPARQL MCP server with \
                  {advertised} tools and 6 workflow prompts for ontology engineering, validation, \

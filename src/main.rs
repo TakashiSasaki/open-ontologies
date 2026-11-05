@@ -188,6 +188,7 @@ const DEFAULT_DATA_DIR: &str = "~/.open-ontologies";
 #[derive(Parser)]
 #[command(
     name = "open-ontologies",
+    version = open_ontologies::BUILD_VERSION,
     about = "Terraform for Knowledge Graphs — AI-native ontology engine"
 )]
 struct Cli {
@@ -2686,7 +2687,7 @@ async fn async_main() -> anyhow::Result<()> {
                 axum::routing::get(|| async {
                     axum::Json(serde_json::json!({
                         "status": "ok",
-                        "version": env!("CARGO_PKG_VERSION"),
+                        "version": open_ontologies::BUILD_VERSION,
                     }))
                 }),
             );
@@ -3198,7 +3199,7 @@ async fn async_main() -> anyhow::Result<()> {
             output_json(
                 &serde_json::json!({
                     "status": "ok",
-                    "version": env!("CARGO_PKG_VERSION"),
+                    "version": open_ontologies::BUILD_VERSION,
                     "triples_loaded": graph.triple_count(),
                 }),
                 cli.pretty,

@@ -4,7 +4,14 @@
 #
 # And to the Rust version the workflows pin, rather than `rust:1`, which moves
 # to each new stable. scripts/check-toolchain-pins.sh fails when the two differ.
-FROM rust:1.99.1-slim-bookworm AS builder
+ARG BUILDER_IMAGE=toolchain
+FROM rust:1.99.1-slim-bookworm AS toolchain
+FROM ${BUILDER_IMAGE} AS builder
+
+# An optional prewarmed builder must still use the reviewed Rust compiler.
+RUN rustc --version | grep -E "^rustc 1\.99\.1 "
+ARG BUILD_VERSION=2.1.0+local.archive
+ENV OPEN_ONTOLOGIES_BUILD_VERSION=${BUILD_VERSION}
 
 # apt is bounded, on update and on install. An apt call with no timeout is what
 # hung CI for the full six hours on 18 Aug 2026 when a mirror went dark, and
@@ -36,7 +43,13 @@ RUN mkdir -p /deps && \
 
 FROM gcr.io/distroless/cc-debian12
 
-LABEL io.modelcontextprotocol.server.name="io.github.fabio-rovai/open-ontologies"
+ARG BUILD_VERSION=2.1.0+local.archive
+ARG SOURCE_REVISION=unknown
+LABEL org.opencontainers.image.source="https://github.com/TakashiSasaki/open-ontologies" \
+      org.opencontainers.image.revision=${SOURCE_REVISION} \
+      org.opencontainers.image.version=${BUILD_VERSION}
+
+LABEL io.modelcontextprotocol.server.name="io.github.TakashiSasaki/open-ontologies"
 
 COPY --from=builder /build/target/release/open-ontologies /usr/local/bin/open-ontologies
 COPY --from=builder /deps/ /
