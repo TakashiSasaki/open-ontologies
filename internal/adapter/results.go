@@ -3,9 +3,11 @@ package adapter
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -20,10 +22,21 @@ type callInfo struct {
 func (a *Adapter) proxyFailure(w http.ResponseWriter, r *http.Request, err error) {
 	if c, ok := r.Context().Value(callKey{}).(callInfo); ok {
 		err = observe(codeBackendTransport, stageBackendRoundTrip, err)
+		var detail *observedError
+		if errors.As(err, &detail) && detail.code == codeBackendLimit {
+			result := a.decorate(c.name, c.args, jsonTool(object{
+				"error":      marshal("The backend response exceeded the 10 MiB adapter limit. Execution outcome is unknown; do not automatically retry mutations."),
+				"error_code": marshal("backend_output_limit"), "execution_outcome": marshal("unknown"),
+				"retry_safe": marshal(false), "partial_results_available": marshal(false),
+			}))
+			a.logDiagnosticCall("MCP upstream response failed", r.Context(), c.name, c.args, c.started, result, result, err)
+			a.respond(w, c.id, result)
+			return
+		}
 		a.logDiagnosticCall("MCP upstream response failed", r.Context(), c.name, c.args, c.started, nil, nil, err)
 	}
-	// Keep the existing HTTP response contract, including ambiguous mutation
-	// outcomes. Logging must never cause a request replay or raise response caps.
+	// Unclassified transport/session failures retain their HTTP contract.
+	// No error path retries a request or raises the response cap.
 	http.Error(w, "upstream connection failed", http.StatusBadGateway)
 }
 
@@ -71,6 +84,12 @@ func (a *Adapter) decorate(name string, args object, raw json.RawMessage) json.R
 	if supplied(p, "error") && string(p["error"]) != `""` {
 		result["isError"] = marshal(true)
 		changed := summarizePolicyDenial(p)
+		if (name == "onto_crosswalk" || name == "onto_enrich" || name == "onto_validate_clinical") && strings.HasPrefix(str(p, "error"), "Crosswalks not loaded:") {
+			p["error_code"], p["dependency"] = marshal("dependency_unavailable"), marshal("clinical_crosswalk")
+			p["configuration_required"] = marshal(true)
+			p["hint"] = marshal("Provision and verify the clinical mapping Parquet inside the backend container at the path expected by this engine. Missing or unreadable data is not an empty mapping result; sample mappings are not validated clinical guidance.")
+			changed = true
+		}
 		if name == "onto_repo_list" && str(p, "error") == "no ontology_dirs configured; set [general] ontology_dirs in config.toml or OPEN_ONTOLOGIES_ONTOLOGY_DIRS" {
 			p["error_code"] = marshal("repository_not_configured")
 			p["configuration_required"] = marshal(true)

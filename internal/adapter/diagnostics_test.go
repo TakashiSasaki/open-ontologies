@@ -13,10 +13,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -273,7 +276,7 @@ func TestBackendResponseLimitsAndProtocolFailuresAreClassified(t *testing.T) {
 	}
 }
 
-func TestProxyFailureLogsCodeWithoutChangingHTTPContract(t *testing.T) {
+func TestProxyLimitIsStructuredWithoutLeakingOrReplaying(t *testing.T) {
 	var buffer bytes.Buffer
 	a := diagnosticAdapter(&buffer)
 	r := httptest.NewRequest(http.MethodPost, "/mcp", nil)
@@ -281,8 +284,14 @@ func TestProxyFailureLogsCodeWithoutChangingHTTPContract(t *testing.T) {
 	w := httptest.NewRecorder()
 	err := observe(codeBackendLimit, stageBackendRead, errors.New("PRIVATE_LIMIT_ERROR"))
 	a.proxyFailure(w, r, err)
-	if w.Code != http.StatusBadGateway || w.Body.String() != "upstream connection failed\n" {
-		t.Fatal("HTTP response contract changed", w.Code, w.Body.String())
+	var reply message
+	if e := json.Unmarshal(w.Body.Bytes(), &reply); e != nil || w.Code != 200 || string(reply.ID) != `"PRIVATE_ID"` {
+		t.Fatal("tool error envelope lost", w.Code, w.Body.String())
+	}
+	var result object
+	_ = json.Unmarshal(reply.Result, &result)
+	if !boolean(result, "isError") || !strings.Contains(string(result["content"]), "backend_output_limit") || strings.Contains(w.Body.String(), "PRIVATE_LIMIT_ERROR") {
+		t.Fatal("bounded structured failure missing", w.Body.String())
 	}
 	entry := logObject(t, &buffer)
 	if str(entry, "tool") != "onto_query" || str(entry, "error_code") != string(codeBackendLimit) || str(entry, "error_stage") != string(stageBackendRead) {
@@ -290,5 +299,39 @@ func TestProxyFailureLogsCodeWithoutChangingHTTPContract(t *testing.T) {
 	}
 	if strings.Contains(buffer.String(), "PRIVATE_") {
 		t.Fatal("proxy failure diagnostics leaked request or error text")
+	}
+}
+
+func TestOtherProxyFailuresKeepHTTPContract(t *testing.T) {
+	a := diagnosticAdapter(&bytes.Buffer{})
+	r := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	r = r.WithContext(context.WithValue(r.Context(), callKey{}, callInfo{name: "onto_clear", id: marshal(7)}))
+	w := httptest.NewRecorder()
+	a.proxyFailure(w, r, errors.New("private transport detail"))
+	if w.Code != 502 || w.Body.String() != "upstream connection failed\n" {
+		t.Fatal(w.Code, w.Body.String())
+	}
+}
+
+func TestLargeMutationResponseDoesNotReplayOrInventPolicyVerdict(t *testing.T) {
+	var calls atomic.Int32
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, strings.Repeat(" ", maxResponse+1))
+	}))
+	defer backend.Close()
+	u, _ := url.Parse(backend.URL)
+	a := diagnosticAdapter(&bytes.Buffer{})
+	a.proxy = httputil.NewSingleHostReverseProxy(u)
+	a.proxy.ModifyResponse, a.proxy.ErrorHandler = a.modifyResponse, a.proxyFailure
+	r := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"onto_clear","arguments":{}}}`))
+	w := httptest.NewRecorder()
+	a.Handler().ServeHTTP(w, r)
+	var reply message
+	_ = json.Unmarshal(w.Body.Bytes(), &reply)
+	p := failurePayload(t, reply.Result, nil)
+	if w.Code != 200 || calls.Load() != 1 || string(reply.ID) != "42" || str(p, "execution_outcome") != "unknown" || supplied(p, "verdict") || boolean(p, "retry_safe") {
+		t.Fatal(w.Code, calls.Load(), w.Body.String())
 	}
 }

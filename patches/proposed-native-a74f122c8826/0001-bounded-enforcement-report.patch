@@ -1,0 +1,48 @@
+--- a/src/policy.rs
++++ b/src/policy.rs
+@@ -51,6 +51,34 @@
+     pub target: String,
+     pub effect: String,
+     pub fired: bool,
++}
++
++// Copyright (c) 2026 佐々木隆志 (Takashi Sasaki) <takashi316@gmail.com> (https://x.com/TakashiSasaki)
++// Bounded enforcement diagnostics; the advisory policy-check API stays full.
++pub(crate) fn rejection_summary(report: &PolicyReport, target_count: usize) -> serde_json::Value {
++    let blocked = report.rule_results.iter()
++        .filter(|r| r.effect == "deny" && r.fired)
++        .map(|r| r.target.as_str())
++        .collect::<std::collections::BTreeSet<_>>();
++    let examples = report.rule_results.iter()
++        .filter(|r| r.effect == "deny" && r.fired)
++        .take(3)
++        .map(|r| serde_json::json!({
++            "rule_name": r.rule_name.chars().take(64).collect::<String>(),
++            "target": r.target.chars().take(256).collect::<String>(),
++            "effect": "deny", "fired": true,
++            "rule_name_truncated": r.rule_name.chars().count() > 64,
++            "target_truncated": r.target.chars().count() > 256,
++        })).collect::<Vec<_>>();
++    serde_json::json!({
++        "verdict": "deny",
++        "evaluated_targets": target_count,
++        "blocked_targets": blocked.len(),
++        "rule_evaluations": report.rule_results.len(),
++        "omitted_rule_results": report.rule_results.len() - examples.len(),
++        "details_truncated": true,
++        "rule_results": examples,
++    })
+ }
+ 
+ const ENSURE: &str = "
+--- a/src/graph.rs
++++ b/src/graph.rs
+@@ -372,7 +372,7 @@
+             anyhow::ensure!(
+                 report.verdict == "allow",
+                 "policy_denied: {}",
+-                serde_json::to_string(&report)?
++                crate::policy::rejection_summary(&report, targets.len())
+             );
+         }
+         tx.commit()?;

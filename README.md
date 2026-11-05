@@ -278,9 +278,41 @@ identify that request's input or cause.
 Proxy transport/response-decoding failures for tool calls also emit
 `MCP upstream response failed` records through the same safe schema, distinguishing
 `backend_output_limit`, `backend_read_error`, `backend_protocol_error` and
-`backend_transport_error`. The existing 10 MiB MCP response cap and HTTP 502 body
-are preserved. A full SELECT on the now 139,781-quad live store exceeded that cap
+`backend_transport_error`. The 10 MiB MCP response cap is preserved. A known
+size-limit failure is returned as a bounded MCP tool error with
+`error_code: backend_output_limit`, `execution_outcome: unknown` and
+`retry_safe:false`, preserving its request ID. It does not assert a policy denial
+or successful mutation. Other transport/protocol/session HTTP failures retain
+their HTTP behavior. A full SELECT on the 139,781-quad live store exceeded the cap
 in the baseline test; this is not evidence of server corruption. Use bounded
 queries/aggregates for MCP, and a bounded loopback administrative snapshot for
 operator full-data comparisons. Ordinary pass-through semantic results and
 session HTTP errors are not turned into a new complete audit stream.
+
+## Bounded defect analysis and clinical dependencies
+
+`onto_defects` runs the pinned native algorithm in a separate disposable worker.
+Supply `ontology_turtle` for an explicit document, or `graph_iri` for one exact
+named graph; omit both for a snapshot of all graphs flattened together. A snapshot
+uses one SPARQL read, at most 10,000 selected rows and 4 MiB Turtle; larger scopes
+return `analysis_scope_required`. Inline Turtle remains limited to 1 MiB.
+`max_seconds` is an integer from 1 to 20 (default 15), including worker capacity,
+snapshot and execution. The native `limit` parameter still only limits listed
+findings. Named-graph analysis excludes other graphs and their dependencies.
+
+Successful `complete:true` means the selected dataset's eight native declaration
+checks finished, not that the whole ontology is OWL-consistent. The original
+native `truncated` field concerns the findings listing. A timeout returns
+`analysis_deadline_exceeded`, `complete:false` and no invented partial findings;
+its process is killed/reaped and scratch removed. Existing shared triples and
+policies are never cleared/reloaded to perform this analysis. Full large-store
+analysis, genuine partial progress and native policy-report construction still
+require engine work. See [the plan](docs/SCALABILITY-PLAN-2026-11-05.md).
+
+Clinical mapping load failures keep `isError:true` and gain
+`error_code:dependency_unavailable` and `dependency:clinical_crosswalk`. An empty
+successful lookup remains an empty mapping result. `inspect-runtime` observes
+`data/crosswalks.parquet` relative to the backend container's working directory,
+distinguishing missing, unknown and present-unverified. It never equates file
+presence with correct Parquet, clinically validated mappings or a tested lookup.
+Run it with the exact `--image-id` and observed `--native-version`.

@@ -43,6 +43,10 @@ func overlayCatalog(raw json.RawMessage) (json.RawMessage, error) {
 			return nil, errors.New("upstream now supplies onto_action_info; review the adapter before upgrading")
 		}
 		switch name {
+		case "onto_defects":
+			tool["description"] = marshal("Check eight native ontology-declaration defect kinds in a bounded private worker. Supply ontology_turtle for a private document or graph_iri for one exact named graph; otherwise analyze a snapshot of all graphs flattened together. Snapshots are limited to 10,000 rows/4 MiB. max_seconds is 1–20, default 15, including queue/snapshot/worker time. limit caps displayed findings only. Oversized/timed-out analyses return isError=true and complete=false, never a clean verdict or invented partial findings. A complete result applies only to the selected dataset; dependencies outside a named graph are not included.")
+		case "onto_crosswalk":
+			tool["description"] = marshal("Look up clinical crosswalk mappings for a code and source_system (ICD10, SNOMED, MeSH). Requires a readable Parquet mapping dataset in the backend container. Missing/unreadable data returns a dependency error, not an empty mapping result. Operator inventory distinguishes file presence from verified data provenance; sample mappings are not validated clinical guidance.")
 		case "onto_convert":
 			tool["description"] = marshal("Convert server files or explicit inline RDF/OWL content using the pinned native engine. For inline mode supply inline_content, from (turtle, ntriples, rdfxml, nquads, trig, jsonld or ofn) and to; omit path/output. Returns content directly, preserves native OFN loss diagnostics, never modifies the shared store. Inline content is limited to 1 MiB and must use absolute non-file IRIs or explicit document bases; file IRIs are rejected to prevent scratch-path identities. Native graph flattening/inferred-graph rules still apply. Ordinary path/output behavior is unchanged.")
 		case "onto_policy_check":
@@ -102,6 +106,9 @@ func overlayCatalog(raw json.RawMessage) (json.RawMessage, error) {
 			properties["ontology_turtle"] = stringField("Optional inline Turtle for a fresh request-local upstream process. Does not load or modify the shared store. At most 1 MiB. File-output options are rejected.")
 		}
 		switch name {
+		case "onto_defects":
+			properties["graph_iri"] = stringField("Optional absolute IRI of one exact named graph to snapshot; excludes other graphs and their dependencies. Omit when supplying ontology_turtle. Default scope is the union of all graphs; snapshots over 10,000 rows/4 MiB are refused.")
+			properties["max_seconds"] = marshal(map[string]any{"type": []string{"integer", "null"}, "minimum": 1, "maximum": 20, "description": "Whole analysis budget including queue, snapshot and worker. Default 15 seconds. Expiry is an error with complete=false; no partial native findings are fabricated."})
 		case "onto_convert":
 			properties["inline_content"] = stringField("Inline RDF/OWL text, at most 1 MiB. Supply inline_content OR path. No output file in inline mode; results return content directly. Requires from and to. File IRIs are rejected; relative IRIs require an explicit non-file document base.")
 			properties["from"] = marshal(map[string]any{"type": []string{"string", "null"}, "enum": []any{"turtle", "ttl", "ntriples", "nt", "rdfxml", "rdf", "xml", "nquads", "nq", "trig", "jsonld", "ofn", nil}, "description": "Source format hint for inline_content only. Native content sniffing still applies."})

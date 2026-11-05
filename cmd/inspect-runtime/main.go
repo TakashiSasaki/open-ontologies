@@ -20,6 +20,22 @@ type item struct {
 	Note  string `json:"note"`
 }
 
+func crosswalk() item {
+	f, err := os.Open("data/crosswalks.parquet")
+	if os.IsNotExist(err) {
+		return item{"missing", "native fixed path relative to container working directory", "The engine's clinical mapping file is absent. No mappings can be read from this path."}
+	}
+	if err != nil {
+		return item{"unknown", "native fixed path relative to container working directory", "The clinical mapping path could not be inspected for readability."}
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() || st.Size() == 0 {
+		return item{"unknown", "native fixed path relative to container working directory", "The mapping path is not a verified nonempty regular file."}
+	}
+	return item{"present_unverified", "native fixed path relative to container working directory", "A nonempty readable file exists; Parquet schema, mappings, provenance and functional lookup have not been verified."}
+}
+
 func binary(env string, names []string, lean bool) item {
 	r := item{"missing", "default container executable resolution", "No executable found in the inspected default locations. Explicit per-call paths were not inspected."}
 	if path := os.Getenv(env); env != "" && path != "" {
@@ -48,19 +64,20 @@ func binary(env string, names []string, lean bool) item {
 }
 func main() {
 	image := flag.String("image-id", "", "Exact backend Docker image SHA-256")
+	nativeVersion := flag.String("native-version", "unknown", "Observed version of the selected native executable")
 	removeSelf := flag.Bool("remove-self", false, "Remove this temporary inspection executable after use")
 	flag.Parse()
 	if !regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(*image) {
 		fmt.Fprintln(os.Stderr, "a full --image-id is required")
 		os.Exit(2)
 	}
-	out := map[string]any{"schema_version": 1, "checked_at": time.Now().UTC().Format(time.RFC3339), "backend_image_id": *image, "native_version": "2.1.0", "execution_environment": "inside selected native container; default dependency discovery only", "optional_modes": map[string]item{
+	out := map[string]any{"schema_version": 1, "checked_at": time.Now().UTC().Format(time.RFC3339), "backend_image_id": *image, "native_version": *nativeVersion, "execution_environment": "inside selected native container; default dependency discovery and fixed clinical path only", "optional_modes": map[string]item{
 		"verified_shacl":      binary("OO_SHACL", []string{"oo-shacl"}, true),
 		"proof_certification": binary("OO_CERT", []string{"oo-cert"}, true),
 		"classical_planning":  binary("FAST_DOWNWARD_BIN", []string{"fast-downward.py"}, false),
 		"external_smt":        binary("", []string{"z3"}, false),
 		"external_fol":        binary("", []string{"vampire"}, false),
-		"clinical_crosswalk":  {State: "unknown", Scope: "application configuration", Note: "Requires a configured readable Parquet crosswalk; file presence and correctness have not been verified by this executable inventory."},
+		"clinical_crosswalk":  crosswalk(),
 		"semantic_search":     {State: "unknown", Scope: "running engine memory", Note: "An executable inventory cannot establish whether an embedding model is loaded. Query the application or perform an explicit functional test."},
 	}}
 	if e := json.NewEncoder(os.Stdout).Encode(out); e != nil {

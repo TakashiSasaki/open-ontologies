@@ -97,8 +97,21 @@ For a store whose full RDF exceeds the MCP output cap, add
 the public MCP cap. The ordinary QA store can use the default MCP snapshot.
 
 After completing read-only QA probes, `large-probe` can load an 11 MiB literal
-from a new QA file and verify the unchanged 502 response from the adapter. It
+from a new QA file and verify a bounded MCP size-limit error from the adapter. It
 requires `--allow-qa-writes`, a disposable native/adapter pair and its mounted
 `--data-dir`, and refuses the live ports. Capture that adapter's journal and use
 `check --require-backend-limit` to assert the real `backend_output_limit` record.
 Do not use this mutating large fixture against production.
+
+`scalability.py <modern-url> --output <private-file>` tests bounded private defect
+analysis, invalid scopes/budgets, clinical dependency errors and malformed RDF,
+then verifies a subsequent status call and unchanged shared triple count. Add
+`--expect-large` to require a quick `analysis_scope_required` result from a store
+larger than 10,000 rows. These modes do not mutate shared data.
+
+For a disposable chain only, add `--allow-qa-writes --native-url <qa-native-mcp>
+--data-dir <qa-mounted-data> --work-root <qa-worker-scratch>`. This seeds 10,005
+synthetic triples plus a small named graph with cycles and blank-node links.
+It verifies exact graph scope, empty graphs and a real native one-second deadline
+on a 1,000-class cycle. It refuses the host's live ports. Run this before the
+11 MiB large-response fixture. No production clear/registration test is used.

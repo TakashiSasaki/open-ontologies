@@ -126,14 +126,12 @@ def large_probe(args):
             stream.write('<urn:diagnostic:large> <urn:p> "' + 'x' * (11 * 1024 * 1024) + '" .\n')
         r = clients[0].rpc('tools/call', {'name': 'onto_load', 'arguments': {'path': '/data/diagnostic-large.ttl'}})
         assert json.loads(r['content'][0]['text']).get('ok') is True
-        try:
-            clients[1].rpc('tools/call', {'name': 'onto_query', 'arguments': {'query': 'SELECT ?s ?p ?o WHERE {?s ?p ?o}'}})
-        except HTTPError as error:
-            assert error.code == 502 and error.read() == b'upstream connection failed\n'
-        else:
-            raise AssertionError('oversized MCP result unexpectedly bypassed its cap')
-        result = {'fixture_literal_bytes': 11 * 1024 * 1024, 'http_status': 502,
-                  'original_http_body_preserved': True, 'qa_writes_only': True}
+        r = clients[1].rpc('tools/call', {'name': 'onto_query', 'arguments': {'query': 'SELECT ?s ?p ?o WHERE {?s ?p ?o}'}})
+        p = json.loads(r['content'][0]['text'])
+        assert r.get('isError') and p['error_code'] == 'backend_output_limit'
+        assert p['execution_outcome'] == 'unknown' and p['retry_safe'] is False
+        result = {'fixture_literal_bytes': 11 * 1024 * 1024, 'http_status': 200,
+                  'structured_mcp_error': True, 'execution_outcome': 'unknown', 'qa_writes_only': True}
         args.output.write_text(json.dumps(result, indent=2) + '\n')
         print(json.dumps(result, indent=2))
     finally:
