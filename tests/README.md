@@ -47,3 +47,25 @@ Use `--legacy` for the direct adapter; omit it for the modern generic proxy.
 
 `make check` adds race detection, vet, path/symlink escape checks, worker hash
 and engine-version mismatch rejection, and real process deadline/cleanup tests.
+
+## Conversion and refusal follow-up
+
+`followup.py` defaults to inline/private/read-only tests, including seven RDF/OWL
+formats in both directions, dataset graph names, OFN warnings, relative/file IRI
+rejection, explicit bases and malformed/oversize/ambiguous requests. It compares
+the shared graph before and after and can check worker scratch cleanup.
+
+```sh
+python3 tests/followup.py http://127.0.0.1:18083/mcp \
+  --native-url http://127.0.0.1:18082/mcp \
+  --allow-qa-writes --data-dir /private/qa/data --work-root /private/qa/requests \
+  --output /private/qa/followup.json
+```
+
+The explicit QA switch additionally registers a deny policy, loads a synthetic
+2,102-subject dataset, attempts native and adapted clears, and verifies the
+refusals and unchanged RDF. It also verifies repository-configuration guidance
+and ordinary file-mode base semantics. It refuses this host's production ports.
+Never run QA-write cases against a live user's store. Omit the switch and both
+directory flags for production read-only checks. `--legacy` targets the adapter
+directly; the default targets the modern generic proxy.

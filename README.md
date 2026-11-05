@@ -2,7 +2,8 @@
 
 Keep remote-client interface improvements outside the Open Ontologies engine.
 This Go HTTP adapter sits between the generic MCP compatibility proxy and an
-**unmodified upstream** Open Ontologies HTTP server. It adds explicit inline and
+version-pinned Open Ontologies HTTP server (unmodified upstream or the selected
+native fork). It adds explicit inline and
 request-local input forms without patching or rebuilding the Rust application.
 
 Author: 佐々木隆志 (Takashi Sasaki), <takashi316@gmail.com>,
@@ -27,6 +28,7 @@ semantics and the annotation audit live here. Neither proxy reads tunnel keys.
 
 | Tool | Added behavior |
 | --- | --- |
+| `onto_convert` | `inline_content` plus source format hint `from` and target `to`. Seven RDF/OWL source formats, direct content output, native OFN loss reports, isolated worker. Existing server path/output calls stay native. |
 | `onto_ingest` | `inline_data` with `format` (`csv`, `json`, `ndjson`, `xml`, `yaml`); `dry_run` in a private worker. Normal inline writes publish generated RDF once through upstream `onto_load`. |
 | `onto_diff` | `old_content` / `new_content` Turtle; exactly one inline content or server path per side. Existing file/file calls pass through unchanged. |
 | `onto_dl_check`, `onto_dl_explain` | Full absolute class IRIs with or without angle brackets. CURIE prefixes are not expanded. |
@@ -82,7 +84,7 @@ with their exact base, regression tests and apply/verification instructions.
 
 ## Build and run
 
-Go 1.25+ (preferred toolchain 1.26.10), Git, and an unmodified Linux executable
+Go 1.25+ (preferred toolchain 1.26.10), Git, and a Linux executable
 matching host architecture/libraries are required. Go code uses only stdlib.
 Python 3 with its standard-library SQLite module is also required for the fixed
 registry reader (no additional Python packages). It opens `mode=ro`, enables
@@ -174,3 +176,62 @@ plan validation/compilation to the pinned native engine. This preserves native
 RDF literal binding and executable PDDL results. Leave it false for the legacy
 unmodified engine. Always qualify the exact backend version and extracted worker
 hash together; interface-only adaptations remain in this adapter.
+
+## Inline conversion and bounded refusal diagnostics
+
+Follow-up plan: [2026-11-05](docs/GEMINI-FOLLOWUP-PLAN-2026-11-05.md).
+For example:
+
+```json
+{
+  "inline_content": "@prefix ex: <https://example.org/> . ex:Cell a <http://www.w3.org/2002/07/owl#Class> .",
+  "from": "turtle",
+  "to": "rdfxml"
+}
+```
+
+Inline conversion stages a file only inside a disposable native worker, returns
+an object with `content`, `format`, `source_format_hint`, `execution_scope` and
+`persistent_store_modified`, and never loads the shared graph. Native source
+sniffing still applies to the format hint. Source formats are Turtle, N-Triples,
+RDF/XML, N-Quads, TriG, JSON-LD and OFN; supported output names remain native.
+OFN reports retain `constructs_not_exported` and round-trip diagnostics. A graph
+output may flatten named graphs or exclude the native inferred graph; choose a
+dataset output such as N-Quads/TriG when graph identity matters. This adapter
+does not certify losslessness or change the converter's algorithms.
+
+Supply exactly one of `path` and `inline_content`; `from` is for inline mode only.
+Inline mode rejects `output` paths and is bounded by the existing size/worker
+limits. It rejects file IRIs anywhere in the parsed dataset, including datatype
+and graph IRIs. Relative IRIs must resolve against an explicit non-file base
+(`@base`, `xml:base`, or JSON-LD context `@base`); it does not silently substitute
+an invented public namespace or expose scratch file identities. Intentional file
+IRIs can still be converted using normal server path mode. A literal containing
+text such as `file:///data/example` is not itself an IRI and is retained.
+
+The entire `onto_convert` tool remains conservatively non-read-only because
+ordinary file mode still supports native output files. No read-only grant was
+added or broadened by the inline mode.
+
+For native `policy_denied` errors larger than 8 KiB, the adapter summarizes a
+valid deny report using exact distinct evaluated/blocked target counts, total
+rule evaluations, up to three bounded examples, omitted-result count, original
+error byte length and SHA-256. It retains MCP `isError: true`, metadata and
+structured-content consistency. It never retries the mutation or disables a
+policy. Small errors, query errors and advisory policy deny verdicts retain their
+original contracts. This reduces the client payload, not the engine's policy
+checking/report-building cost, and does not claim rollback of every higher-level
+registry effect. Full native errors are not copied into client summaries or logs;
+logs retain only counts and a digest.
+
+An unconfigured `onto_repo_list` remains an error with
+`error_code: repository_not_configured`, `configuration_required: true` and
+configuration/cache-list guidance. The adapter does not search compilation
+caches or silently widen filesystem exposure. Operators can explicitly configure
+`OPEN_ONTOLOGIES_ONTOLOGY_DIRS=/data/ontologies` in the backend container and
+populate that source directory under the persistent data mount.
+
+The solver inventory still reflects the actual backend container. Installing
+Vampire/Z3 on the host alone does not make them available to its native process.
+FOL export and theorem references do not establish that a proof was independently
+checked. An optional image with tested native solvers is separate future work.

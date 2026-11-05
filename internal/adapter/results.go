@@ -58,6 +58,20 @@ func (a *Adapter) decorate(name string, args object, raw json.RawMessage) json.R
 	}
 	if supplied(p, "error") && string(p["error"]) != `""` {
 		result["isError"] = marshal(true)
+		changed := summarizePolicyDenial(p)
+		if name == "onto_repo_list" && str(p, "error") == "no ontology_dirs configured; set [general] ontology_dirs in config.toml or OPEN_ONTOLOGIES_ONTOLOGY_DIRS" {
+			p["error_code"] = marshal("repository_not_configured")
+			p["configuration_required"] = marshal(true)
+			p["hint"] = marshal("Configure [general] ontology_dirs or OPEN_ONTOLOGIES_ONTOLOGY_DIRS inside the backend container (for example a managed /data/ontologies directory). Compilation cache is not a source repository and is not searched automatically. Use onto_cache_list for compiled-cache entries.")
+			changed = true
+		}
+		if changed {
+			blocks[0]["text"] = marshal(string(marshal(p)))
+			result["content"] = marshal(blocks)
+			if supplied(result, "structuredContent") {
+				result["structuredContent"] = marshal(p)
+			}
+		}
 		return marshal(result)
 	}
 	if boolean(result, "isError") {

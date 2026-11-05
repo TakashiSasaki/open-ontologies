@@ -188,7 +188,7 @@ func (a *Adapter) respond(w http.ResponseWriter, id, result json.RawMessage) {
 	_, _ = w.Write(marshal(message{Version: "2.0", ID: id, Result: result}))
 }
 func needsAdaptation(name string, args object) bool {
-	return auditedTools[name] || name == "onto_dl_check" || name == "onto_dl_explain" || (scopedTools[name] && supplied(args, "ontology_turtle")) || (name == "onto_ingest" && (supplied(args, "inline_data") || boolean(args, "dry_run"))) || (name == "onto_diff" && (supplied(args, "old_content") || supplied(args, "new_content")))
+	return (name == "onto_convert" && (supplied(args, "inline_content") || supplied(args, "from"))) || auditedTools[name] || name == "onto_dl_check" || name == "onto_dl_explain" || (scopedTools[name] && supplied(args, "ontology_turtle")) || (name == "onto_ingest" && (supplied(args, "inline_data") || boolean(args, "dry_run"))) || (name == "onto_diff" && (supplied(args, "old_content") || supplied(args, "new_content")))
 }
 
 func (a *Adapter) withWorker(ctx context.Context, fn func(*worker) (json.RawMessage, error)) (json.RawMessage, error) {
@@ -214,6 +214,9 @@ func (a *Adapter) withWorker(ctx context.Context, fn func(*worker) (json.RawMess
 }
 func (a *Adapter) adapt(ctx context.Context, h http.Header, name string, args object) (json.RawMessage, error) {
 	args = clone(args)
+	if name == "onto_convert" {
+		return a.convert(ctx, args)
+	}
 	if auditedTools[name] {
 		return a.auditCall(ctx, h, name, args)
 	}

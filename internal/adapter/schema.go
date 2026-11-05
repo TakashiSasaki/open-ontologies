@@ -43,6 +43,8 @@ func overlayCatalog(raw json.RawMessage) (json.RawMessage, error) {
 			return nil, errors.New("upstream now supplies onto_action_info; review the adapter before upgrading")
 		}
 		switch name {
+		case "onto_convert":
+			tool["description"] = marshal("Convert server files or explicit inline RDF/OWL content using the pinned native engine. For inline mode supply inline_content, from (turtle, ntriples, rdfxml, nquads, trig, jsonld or ofn) and to; omit path/output. Returns content directly, preserves native OFN loss diagnostics, never modifies the shared store. Inline content is limited to 1 MiB and must use absolute non-file IRIs or explicit document bases; file IRIs are rejected to prevent scratch-path identities. Native graph flattening/inferred-graph rules still apply. Ordinary path/output behavior is unchanged.")
 		case "onto_policy_check":
 			tool["description"] = marshal("Advisory policy evaluation for 1–64 absolute target IRIs, with or without angle brackets. Whole RDF-term placeholders are bound safely. Query or IRI errors return indeterminate with isError=true. Deny overrides, otherwise allow only after every rule evaluates. This is not an atomic authorization guard for mutations.")
 		case "onto_shacl_check":
@@ -58,7 +60,7 @@ func overlayCatalog(raw json.RawMessage) (json.RawMessage, error) {
 		case "onto_status":
 			tool["description"] = marshal("Core MCP health and tool-surface status, plus the adapter identity and an operator snapshot of optional dependency readiness. status:ok does not mean every optional tool/mode is usable. Inventory timestamps and availability-versus-execution limits are explicit.")
 		}
-		if name != "onto_ingest" && name != "onto_diff" && !scopedTools[name] {
+		if name != "onto_convert" && name != "onto_ingest" && name != "onto_diff" && !scopedTools[name] {
 			continue
 		}
 		var schema object
@@ -100,6 +102,11 @@ func overlayCatalog(raw json.RawMessage) (json.RawMessage, error) {
 			properties["ontology_turtle"] = stringField("Optional inline Turtle for a fresh request-local upstream process. Does not load or modify the shared store. At most 1 MiB. File-output options are rejected.")
 		}
 		switch name {
+		case "onto_convert":
+			properties["inline_content"] = stringField("Inline RDF/OWL text, at most 1 MiB. Supply inline_content OR path. No output file in inline mode; results return content directly. Requires from and to. File IRIs are rejected; relative IRIs require an explicit non-file document base.")
+			properties["from"] = marshal(map[string]any{"type": []string{"string", "null"}, "enum": []any{"turtle", "ttl", "ntriples", "nt", "rdfxml", "rdf", "xml", "nquads", "nq", "trig", "jsonld", "ofn", nil}, "description": "Source format hint for inline_content only. Native content sniffing still applies."})
+			properties["path"] = stringField("Source file in the server filesystem. Supply path OR inline_content. The client VM filesystem is not shared with the server.")
+			removeRequired("path")
 		case "onto_ingest":
 			properties["inline_data"] = stringField("Inline CSV, JSON, NDJSON, XML or YAML, at most 1 MiB. Supply exactly one of path and inline_data; format is required for inline data.")
 			properties["dry_run"] = marshal(map[string]any{"type": []string{"boolean", "null"}, "description": "Parse and map in a fresh upstream worker, without publishing to the shared store. Default false."})
