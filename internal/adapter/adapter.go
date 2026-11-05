@@ -20,16 +20,17 @@ import (
 )
 
 type Config struct {
-	BackendURL      string            `json:"backend_url"`
-	WorkerBinary    string            `json:"worker_binary"`
-	WorkerSHA256    string            `json:"worker_sha256"`
-	UpstreamVersion string            `json:"upstream_version"`
-	WorkRoot        string            `json:"work_root"`
-	ServerDataRoots map[string]string `json:"server_data_roots,omitempty"`
-	StateDBPath     string            `json:"state_db_path,omitempty"`
-	CapabilityFile  string            `json:"capability_file,omitempty"`
-	MaxWorkers      int               `json:"max_workers,omitempty"`
-	TimeoutSeconds  int               `json:"timeout_seconds,omitempty"`
+	NativeActionSemantics bool              `json:"native_action_semantics,omitempty"`
+	BackendURL            string            `json:"backend_url"`
+	WorkerBinary          string            `json:"worker_binary"`
+	WorkerSHA256          string            `json:"worker_sha256"`
+	UpstreamVersion       string            `json:"upstream_version"`
+	WorkRoot              string            `json:"work_root"`
+	ServerDataRoots       map[string]string `json:"server_data_roots,omitempty"`
+	StateDBPath           string            `json:"state_db_path,omitempty"`
+	CapabilityFile        string            `json:"capability_file,omitempty"`
+	MaxWorkers            int               `json:"max_workers,omitempty"`
+	TimeoutSeconds        int               `json:"timeout_seconds,omitempty"`
 }
 type Adapter struct {
 	cfg      Config

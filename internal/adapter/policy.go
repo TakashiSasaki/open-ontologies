@@ -11,6 +11,9 @@ import (
 var auditedTools = map[string]bool{"onto_policy_check": true, "onto_shacl_check": true, "onto_action_info": true, "onto_action_applicable": true, "onto_plan_validate": true, "onto_plan_compile_pddl": true}
 
 func (a *Adapter) auditCall(ctx context.Context, h http.Header, name string, args object) (json.RawMessage, error) {
+	if a.cfg.NativeActionSemantics && (name == "onto_action_applicable" || name == "onto_plan_validate" || name == "onto_plan_compile_pddl" || name == "onto_policy_check") {
+		return a.nativeTool(ctx, h, name, args)
+	}
 	switch name {
 	case "onto_policy_check":
 		return a.policyCheck(ctx, h, args)

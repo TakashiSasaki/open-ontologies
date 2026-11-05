@@ -127,3 +127,37 @@ func TestIncompletePathsAreNotSilentlyChecked(t *testing.T) {
 		t.Fatal(shapes, issues)
 	}
 }
+
+func TestNativeActionModePreservesEngineResults(t *testing.T) {
+	for _, name := range []string{"onto_policy_check", "onto_action_applicable", "onto_plan_validate", "onto_plan_compile_pddl"} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request message
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+					return
+				}
+				var params struct {
+					Name      string `json:"name"`
+					Arguments object `json:"arguments"`
+				}
+				_ = json.Unmarshal(request.Params, &params)
+				if params.Name != name || str(params.Arguments, "value") != "\"SN-003\"" {
+					t.Error(string(request.Params))
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(message{Version: "2.0", ID: request.ID, Result: jsonTool(object{"execution_ready": marshal(true), "native_marker": marshal(true)})})
+			}))
+			defer server.Close()
+			a := &Adapter{cfg: Config{BackendURL: server.URL, NativeActionSemantics: true}, client: server.Client()}
+			raw, err := a.auditCall(context.Background(), http.Header{}, name, object{"value": marshal("\"SN-003\"")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, err := payload(raw)
+			if err != nil || !boolean(p, "execution_ready") || !boolean(p, "native_marker") {
+				t.Fatal(string(raw), err)
+			}
+		})
+	}
+}

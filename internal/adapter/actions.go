@@ -174,6 +174,10 @@ func (a *Adapter) actionCall(ctx context.Context, h http.Header, name string, ar
 		}
 		entries := []object{}
 		for _, s := range all {
+			if a.cfg.NativeActionSemantics {
+				entries = append(entries, object{"schema": marshal(s), "native_term_binding": marshal(true), "binding_diagnostic": marshal("Native whole-term IRI/N-Triples literal binding; partial templates require migration. Live mutations enforce native policies and preconditions transactionally.")})
+				continue
+			}
 			_, err := normalizedAction(s)
 			diagnostic := "Whole-term IRI bindings can be normalized in a private simulation; live apply retains native semantics."
 			if err != nil {
@@ -181,7 +185,7 @@ func (a *Adapter) actionCall(ctx context.Context, h http.Header, name string, ar
 			}
 			entries = append(entries, object{"schema": marshal(s), "private_simulation_supported": marshal(err == nil), "live_iri_binding_compatible": marshal(liveBindingCompatibility(s)), "binding_diagnostic": marshal(diagnostic)})
 		}
-		return jsonTool(object{"actions": marshal(entries), "count": marshal(len(entries)), "read_only_registry_snapshot": marshal(true), "live_execution_semantics": marshal("Native; no precondition bypass or shared schema rewrite. Applicability is advisory and does not enforce policies atomically.")}), nil
+		return jsonTool(object{"actions": marshal(entries), "count": marshal(len(entries)), "read_only_registry_snapshot": marshal(true), "live_execution_semantics": marshal("Applicability remains advisory; execution semantics are owned by the selected native backend. No shared schema rewrite.")}), nil
 	}
 	if name == "onto_action_applicable" {
 		s, e := findAction(r, str(args, "action_name"))

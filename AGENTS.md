@@ -1,7 +1,8 @@
 # Development
 
 - This adapter changes the Open Ontologies MCP interface, not its Rust engine.
-- Use an unmodified upstream binary extracted from the selected backend image.
+- Use a hash-pinned worker extracted from the selected backend image. Native
+  fork adoption was authorized on 2026-11-05; backend and worker must match.
 - Keep the general MCP protocol bridge in its own mcp-compat-proxy repository.
 - Never clear, snapshot/restore, or temporarily load the shared store for a
   request-local analysis. Spawn an independent worker with a fresh data directory.

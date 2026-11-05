@@ -166,3 +166,11 @@ differs from `upstream_version`, and checks that each worker reports that same
 engine version. This prevents silently mixing an upgraded backend with an old
 private engine; a compatible upstream update needs configuration/worker refresh,
 not a patch/rebuild of the Rust source.
+
+## Native fork deployment
+
+`native_action_semantics: true` forwards policy checks, action applicability and
+plan validation/compilation to the pinned native engine. This preserves native
+RDF literal binding and executable PDDL results. Leave it false for the legacy
+unmodified engine. Always qualify the exact backend version and extracted worker
+hash together; interface-only adaptations remain in this adapter.
