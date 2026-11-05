@@ -3,6 +3,7 @@
   "eval_rag",
   "eval_rag_mmrag",
   "graph_projection_lossy_check",
+  "onto_action_info",
   "onto_align_flora",
   "onto_align_fuzzy",
   "onto_cache_list",

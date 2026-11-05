@@ -39,6 +39,25 @@ func overlayCatalog(raw json.RawMessage) (json.RawMessage, error) {
 	}
 	for _, tool := range tools {
 		name := str(tool, "name")
+		if name == "onto_action_info" {
+			return nil, errors.New("upstream now supplies onto_action_info; review the adapter before upgrading")
+		}
+		switch name {
+		case "onto_policy_check":
+			tool["description"] = marshal("Advisory policy evaluation for 1–64 absolute target IRIs, with or without angle brackets. Whole RDF-term placeholders are bound safely. Query or IRI errors return indeterminate with isError=true. Deny overrides, otherwise allow only after every rule evaluates. This is not an atomic authorization guard for mutations.")
+		case "onto_shacl_check":
+			tool["description"] = marshal("Declaration/bound preflight for all SHACL NodeShape/PropertyShape references, independently of targetClass, targetNode, targetSubjectsOf or targetObjectsOf. Walks property paths; reports coverage limits explicitly. Does not evaluate data conformance or fully prove SHACL well-formedness. Server files must be inside configured readable data roots.")
+		case "onto_action_applicable":
+			tool["description"] = marshal("Advisory evaluation of a registered action's ASK/SELECT preconditions using complete absolute IRI bindings, with or without angle brackets. Invalid input or query errors are failures. Inspect onto_action_info for schema details and live-apply compatibility; live apply keeps native semantics.")
+		case "onto_plan_validate":
+			tool["description"] = marshal("Validate a deterministic IRI-effect plan in a private upstream worker. A point-in-time graph snapshot is flattened across graphs like native validation. Parameter/schema copies are normalized without rewriting shared actions. Reports goals separately. Not a policy/invariant authorization check or a concurrent transaction. Limits: 256 steps, 10,000 triples.")
+		case "onto_plan_compile_pddl":
+			tool["description"] = marshal("Emit exploratory PDDL from private normalized action copies and a default-graph snapshot (10,000 triples maximum). Expands predicate a to rdf:type for simple ASK triples. The native compiler is incomplete: execution_ready=false and execution_blockers explain why the output must not be run as a verified plan.")
+		case "onto_temporal_query":
+			tool["description"] = marshal("Query temporal NAMED graphs only using a SPARQL graph pattern and optional valid_at/as_of instants. The default graph is excluded. complete describes the selected temporal scope, not all stored triples; use onto_query for default-graph data.")
+		case "onto_status":
+			tool["description"] = marshal("Core MCP health and tool-surface status, plus the adapter identity and an operator snapshot of optional dependency readiness. status:ok does not mean every optional tool/mode is usable. Inventory timestamps and availability-versus-execution limits are explicit.")
+		}
 		if name != "onto_ingest" && name != "onto_diff" && !scopedTools[name] {
 			continue
 		}
@@ -96,6 +115,7 @@ func overlayCatalog(raw json.RawMessage) (json.RawMessage, error) {
 		schema["properties"] = marshal(properties)
 		tool["inputSchema"] = marshal(schema)
 	}
+	tools = append(tools, object{"name": marshal("onto_action_info"), "description": marshal("Read registered action schema details (parameters, preconditions, effects, outcomes) and private-simulation compatibility diagnostics. Optional action_name selects one; omitted lists all (maximum 256). Reads SQLite in mode=ro without creating tables or modifying registries. Live apply retains native semantics."), "inputSchema": marshal(map[string]any{"type": "object", "properties": map[string]any{"action_name": map[string]any{"type": []string{"string", "null"}, "maxLength": 256}}, "additionalProperties": false})})
 	result["tools"] = marshal(tools)
 	return marshal(result), nil
 }

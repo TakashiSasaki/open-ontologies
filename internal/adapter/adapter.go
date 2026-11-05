@@ -26,6 +26,8 @@ type Config struct {
 	UpstreamVersion string            `json:"upstream_version"`
 	WorkRoot        string            `json:"work_root"`
 	ServerDataRoots map[string]string `json:"server_data_roots,omitempty"`
+	StateDBPath     string            `json:"state_db_path,omitempty"`
+	CapabilityFile  string            `json:"capability_file,omitempty"`
 	MaxWorkers      int               `json:"max_workers,omitempty"`
 	TimeoutSeconds  int               `json:"timeout_seconds,omitempty"`
 }
@@ -46,6 +48,9 @@ func New(cfg Config, version string) (*Adapter, error) {
 	}
 	if !filepath.IsAbs(cfg.WorkerBinary) || !filepath.IsAbs(cfg.WorkRoot) {
 		return nil, errors.New("worker binary and work root must be absolute")
+	}
+	if (cfg.StateDBPath != "" && !filepath.IsAbs(cfg.StateDBPath)) || (cfg.CapabilityFile != "" && !filepath.IsAbs(cfg.CapabilityFile)) {
+		return nil, errors.New("state_db_path and capability_file must be absolute when configured")
 	}
 	if cfg.UpstreamVersion == "" {
 		return nil, errors.New("upstream_version must pin the expected engine version")
@@ -85,7 +90,9 @@ func New(cfg Config, version string) (*Adapter, error) {
 	if _, e := rand.Read(nonce[:]); e != nil {
 		return nil, e
 	}
-	return &Adapter{cfg: cfg, client: client, proxy: p, slots: make(chan struct{}, cfg.MaxWorkers), instance: hex.EncodeToString(nonce[:]), Version: version}, nil
+	a := &Adapter{cfg: cfg, client: client, proxy: p, slots: make(chan struct{}, cfg.MaxWorkers), instance: hex.EncodeToString(nonce[:]), Version: version}
+	p.ModifyResponse = a.modifyResponse
+	return a, nil
 }
 
 func (a *Adapter) Handler() http.Handler {
@@ -153,6 +160,7 @@ func (a *Adapter) serveMCP(w http.ResponseWriter, r *http.Request) {
 			args = object{}
 		}
 		if !needsAdaptation(params.Name, args) {
+			r = r.WithContext(context.WithValue(r.Context(), callKey{}, callInfo{params.Name, args, m.ID}))
 			a.proxy.ServeHTTP(w, r)
 			return
 		}
@@ -161,6 +169,7 @@ func (a *Adapter) serveMCP(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			result = errorTool(err)
 		}
+		result = a.decorate(params.Name, args, result)
 		slog.Info("adapted MCP call", "tool", params.Name, "duration_ms", time.Since(started).Milliseconds(), "adapter_error", err != nil, "result_bytes", len(result))
 		a.respond(w, m.ID, result)
 	default:
@@ -178,7 +187,7 @@ func (a *Adapter) respond(w http.ResponseWriter, id, result json.RawMessage) {
 	_, _ = w.Write(marshal(message{Version: "2.0", ID: id, Result: result}))
 }
 func needsAdaptation(name string, args object) bool {
-	return name == "onto_dl_check" || name == "onto_dl_explain" || (scopedTools[name] && supplied(args, "ontology_turtle")) || (name == "onto_ingest" && (supplied(args, "inline_data") || boolean(args, "dry_run"))) || (name == "onto_diff" && (supplied(args, "old_content") || supplied(args, "new_content")))
+	return auditedTools[name] || name == "onto_dl_check" || name == "onto_dl_explain" || (scopedTools[name] && supplied(args, "ontology_turtle")) || (name == "onto_ingest" && (supplied(args, "inline_data") || boolean(args, "dry_run"))) || (name == "onto_diff" && (supplied(args, "old_content") || supplied(args, "new_content")))
 }
 
 func (a *Adapter) withWorker(ctx context.Context, fn func(*worker) (json.RawMessage, error)) (json.RawMessage, error) {
@@ -204,6 +213,9 @@ func (a *Adapter) withWorker(ctx context.Context, fn func(*worker) (json.RawMess
 }
 func (a *Adapter) adapt(ctx context.Context, h http.Header, name string, args object) (json.RawMessage, error) {
 	args = clone(args)
+	if auditedTools[name] {
+		return a.auditCall(ctx, h, name, args)
+	}
 	if name == "onto_dl_check" || name == "onto_dl_explain" {
 		keys := []string{"class_iri"}
 		if name == "onto_dl_check" {

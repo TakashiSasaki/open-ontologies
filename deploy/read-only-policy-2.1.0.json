@@ -27,6 +27,12 @@
       ],
       "readOnlyHint": true
     },
+    "onto_action_info": {
+      "input_schema_sha256": [
+        "42eeffbf7211743c015c3b1ab36f9296a4734f7b36db1b182062c65f684a135d"
+      ],
+      "readOnlyHint": true
+    },
     "onto_align_flora": {
       "input_schema_sha256": [
         "9bcf1794ea446d86c913aaa53dff73b62a5d31ee79d94d0c14633bd0e9aca22f"

@@ -37,6 +37,23 @@
     "historical_test_note": "The source fork previously passed its three trace regressions; this reconstructed candidate was not recompiled."
   },
   "publication": "local preservation only; no upstream submission",
-  "attribution": "Copyright (c) 2026 佐々木隆志 (Takashi Sasaki) <takashi316@gmail.com> (https://x.com/TakashiSasaki)",
-  "upstream_license_sha256": "8aecab11d51f3cf7b43440859eb51e7a256f294a648a11b4ed224e9e91ce18bd"
+  "attribution": "Copyright (c) 2026 \u4f50\u3005\u6728\u9686\u5fd7 (Takashi Sasaki) <takashi316@gmail.com> (https://x.com/TakashiSasaki)",
+  "upstream_license_sha256": "8aecab11d51f3cf7b43440859eb51e7a256f294a648a11b4ed224e9e91ce18bd",
+  "audit_2026_11_05_candidate": {
+    "file": "0003-pddl-rdf-type-shorthand.patch",
+    "format": "git apply unified diff (not a mailbox)",
+    "base_commit": "cefe5997d04553ac495873e8aa1046c1d6b85f7d",
+    "sha256": "6dd8a84c3eb911134546ae7e18f9db90df1555f1dba2da6dc8262ab62b696c7b",
+    "result_tree": "dc6d2f657cdce634852db742efa17ed9f71e2850",
+    "apply_and_reverse_verified": true,
+    "full_rust_crate_tests": false,
+    "scope": "Normalize SPARQL predicate a in the simple PDDL ASK extractor; does not fix constants, symbol collisions, general SPARQL translation or execution readiness.",
+    "verification_note": "Apply/reverse verified; isolated module harness checked separately. Full native crate and runtime engine not rebuilt.",
+    "isolated_module_harness_tests": {
+      "passed": 7,
+      "failed": 0,
+      "uses_stand_in_action_types": true,
+      "full_crate_test": false
+    }
+  }
 }

@@ -49,9 +49,9 @@ def run(args):
     try:
         before=call(c,'onto_status',{})
         assert before['version']==args.expected_version,before['version']
-        tools=c.tools();assert len(tools)==124
+        tools=c.tools();assert len(tools)==125
         annotated=sum(bool(t.get('annotations',{}).get('readOnlyHint')) for t in tools)
-        if not args.legacy:assert annotated==38,annotated
+        if not args.legacy:assert annotated==39,annotated
         assert 'inline_data' in next(t['inputSchema']['properties'] for t in tools if t['name']=='onto_ingest')
         checks.append('catalog_and_annotations')
         for fmt,data in [('json','[{"id":1,"name":"Ada"}]'),('csv','id,name\n1,Ada\n'),('ndjson','{"id":1,"name":"Ada"}\n'),('xml','<root><row><id>1</id><name>Ada</name></row></root>'),('yaml','- id: 1\n  name: Ada\n')]:

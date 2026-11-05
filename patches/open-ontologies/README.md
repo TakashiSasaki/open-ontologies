@@ -2,7 +2,8 @@
 
 Copyright (c) 2026 佐々木隆志 (Takashi Sasaki) <takashi316@gmail.com> (https://x.com/TakashiSasaki)
 
-These mailboxes preserve native changes that the intermediary cannot implement.
+These files preserve native fixes and future submission candidates. Some have
+adapter workarounds; engine diagnostics still require native changes.
 They are local submission candidates; no upstream issue, pull request or push
 has been made. The running adapter/backend do not apply or build these patches.
 The adapter's existing `v0.1.0` tag remains the original deployment checkpoint.
@@ -19,6 +20,27 @@ mailbox bytes. The patches use normal `git format-patch` format.
 | --- | --- | --- |
 | [0001](0001-tableaux-diagnostics-and-unknown-verdicts.patch) | Named, bounded tableau diagnostics, retained failed-branch/clash steps, and unknown JSON verdicts on exhausted budgets. Includes three regression tests. | `src/tableaux.rs`, new `src/tableaux/diagnostic_trace_tests.rs` |
 | [0002](0002-cli-version-flag.patch) | Root CLI `--version` support through clap using the package version. | `src/main.rs` |
+| [0003](0003-pddl-rdf-type-shorthand.patch) | SPARQL predicate `a` becomes the same `rdf:type` term as an explicit IRI in simple ASK-to-PDDL translation; includes a regression test. | `src/plan_pddl.rs` |
+
+**0003 is a standalone `git apply` unified diff, not a format-patch mailbox.**
+It was authored during the 2026-11-05 audit. Apply/reverse was checked against
+the exact base in a private Git index. Its module tests were checked in an
+isolated Rust harness with lightweight stand-ins for the action data types;
+the full upstream crate has not been rebuilt or tested for this candidate.
+It does not make the PDDL stub complete: domain constants, reverse symbol maps,
+collisions, RDF literals and general SPARQL still require engine design work.
+The adapter performs this narrow normalization in private action copies today.
+
+```sh
+git apply --check "$PATCH_DIR/0003-pddl-rdf-type-shorthand.patch"
+git apply "$PATCH_DIR/0003-pddl-rdf-type-shorthand.patch"
+cargo test --release --locked --features embeddings,plugins,sql --lib plan_pddl::tests
+```
+
+Atomic policy enforcement across registry lookup and graph mutation is also
+still an engine responsibility. No speculative transaction patch is included:
+SQLite metadata and the RDF store do not share a transaction boundary, and a
+proxy precheck or mutex cannot serialize native background/alternative writers.
 
 Patch 0002 is independent of the tableau change and may be considered separately.
 It is reconstructed from the old local version flag in an upstream-friendly

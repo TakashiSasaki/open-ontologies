@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-const workerTools = "onto_load,onto_clear,onto_save,onto_reason,onto_defects,onto_dl_check,onto_dl_explain,onto_justify,onto_shacl,onto_ingest,onto_diff,onto_status"
+const workerTools = "onto_load,onto_clear,onto_save,onto_reason,onto_defects,onto_dl_check,onto_dl_explain,onto_justify,onto_shacl,onto_ingest,onto_diff,onto_status,onto_query,onto_action_register,onto_plan_validate,onto_plan_compile_pddl,onto_validate"
 
 type worker struct {
 	cmd      *exec.Cmd

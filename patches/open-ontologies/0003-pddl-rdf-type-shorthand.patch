@@ -1,0 +1,43 @@
+--- a/src/plan_pddl.rs
++++ b/src/plan_pddl.rs
+@@ -69,7 +69,15 @@
+     if parts.len() != 3 {
+         return None;
+     }
+-    Some((parts[0].to_string(), parts[1].to_string(), parts[2].to_string()))
++    // SPARQL's predicate-position `a` abbreviates rdf:type. Use the same
++    // full IRI that initial RDF facts carry, rather than emitting a different
++    // PDDL predicate argument plus an "untranslated term" note.
++    let predicate = if parts[1] == "a" {
++        "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"
++    } else {
++        parts[1]
++    };
++    Some((parts[0].to_string(), predicate.to_string(), parts[2].to_string()))
+ }
+ 
+ /// Translate a triple position (placeholder `<{x}>`, full IRI `<...>`, or bare
+@@ -296,6 +304,23 @@
+     }
+ 
+     #[test]
++    fn rdf_type_shorthand_matches_explicit_iri_in_pddl() {
++        let mut shorthand = rename_schema();
++        shorthand.preconditions = vec![
++            "ASK { <{old}> a <http://www.w3.org/2002/07/owl#Class> . }".to_string(),
++        ];
++        let mut explicit = shorthand.clone();
++        explicit.preconditions = vec![
++            "ASK { <{old}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Class> . }".to_string(),
++        ];
++        let got = compile_domain("ontology", &[shorthand]);
++        let expected = compile_domain("ontology", &[explicit]);
++        assert_eq!(got.domain, expected.domain);
++        assert_eq!(got.translation_notes, expected.translation_notes);
++        assert!(!got.translation_notes.iter().any(|n| n == "untranslated term: a"));
++    }
++
++    #[test]
+     fn try_extract_ask_returns_none_for_select() {
+         let q = "SELECT ?x WHERE { ?x a <http://www.w3.org/2002/07/owl#Class> }";
+         assert!(try_extract_ask_triple(q).is_none());

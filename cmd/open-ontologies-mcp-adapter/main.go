@@ -21,9 +21,9 @@ var revision = "unknown"
 var modified = "true"
 
 func version() string {
-	v := "0.1.0+local." + revision
+	v := "0.2.0+local." + revision
 	if len(revision) > 12 {
-		v = "0.1.0+local." + revision[:12]
+		v = "0.2.0+local." + revision[:12]
 	}
 	if modified != "false" {
 		v += ".dirty"
