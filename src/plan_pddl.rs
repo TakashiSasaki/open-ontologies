@@ -1,352 +1,515 @@
 // SPDX-FileCopyrightText: 2026 Fabio Rovai
+// SPDX-FileCopyrightText: 2026 佐々木隆志 (Takashi Sasaki) <takashi316@gmail.com> (https://x.com/TakashiSasaki)
 // SPDX-License-Identifier: MIT
+// Copyright (c) 2026 佐々木隆志 (Takashi Sasaki) <takashi316@gmail.com> (https://x.com/TakashiSasaki)
 
-//! Planner stub (#45) — PDDL emission from Dynamics action schemas.
-//!
-//! Compiles registered [`crate::dynamics::ActionSchema`]s into a PDDL domain
-//! and emits a problem instance from the loaded graph plus a Turtle goal slice.
-//! The actual planning is delegated to an external solver (Fast Downward) per
-//! the LLM-Modulo convention: the server only exposes the PDDL compilation +
-//! plan validation; the orchestrator runs the solver and feeds steps back.
-//!
-//! ## Bounded scope (v0.4 stub)
-//!
-//! - Single predicate `(triple ?s ?p ?o)` with one typed sort `iri`.
-//! - Parameter slots from `ActionSchema::parameters` become typed PDDL
-//!   parameters.
-//! - Preconditions of the form `ASK { <{a}> <pred> <{b}> }` are translated to
-//!   `(triple ?a "pred-as-constant" ?b)`. Free-form SPARQL is preserved as a
-//!   PDDL comment so the audit trail is explicit about the lossy translation.
-//! - `AddTriple` / `AddClass` effects compile to positive `triple` facts.
-//! - `RemoveTriple` compiles to negated `triple` facts via STRIPS delete.
-//!
-//! ## Honest deferral
-//!
-//! Real OWL → PDDL compilation requires careful handling of existentials,
-//! cardinality restrictions, and open-world semantics. The Borgwardt KR 2025
-//! paper is the anchor for the rigorous version; this stub is a sand-table.
+//! A matched PDDL domain/problem for deterministic finite RDF triple actions.
+//! Positive ASK basic triple patterns are supported. Arbitrary SPARQL, OWL
+//! entailment, policy/invariant logic, blank-node parameters and stochastic
+//! actions are not silently approximated. Notes make the artifact unready.
+use crate::{
+    dynamics::{ActionSchema, EffectSpec},
+    graph::GraphStore,
+    rdf_bindings::{self, Bindings},
+};
+use oxigraph::model::Term;
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::dynamics::{ActionSchema, EffectSpec};
-
-/// Result of compiling a domain + problem.
+pub type Triple = (String, String, String);
 #[derive(Clone, Debug)]
 pub struct CompiledPddl {
     pub domain: String,
     pub problem: String,
-    /// Translation notes: each entry is a precondition or effect that the
-    /// stub couldn't fully encode and that was preserved as a PDDL comment.
     pub translation_notes: Vec<String>,
+    pub translation_complete: bool,
+    pub execution_ready: bool,
+    /// PDDL symbol -> canonical RDF term (including literal quotes/datatype).
+    pub symbols: BTreeMap<String, String>,
+    /// PDDL operator -> native action name; parameters retain declaration order.
+    pub action_symbols: BTreeMap<String, String>,
+    pub parameter_symbols: BTreeMap<String, Vec<(String, String)>>,
 }
-
-/// Sanitise an IRI or label into a PDDL-safe identifier (no angle brackets,
-/// slashes, colons; lower-case alphanumeric + `_`).
-fn sanitise(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
-        } else {
-            out.push('_');
+fn symbol(prefix: &str, input: &str) -> String {
+    let mut s = format!("{prefix}_");
+    for b in input.as_bytes() {
+        use std::fmt::Write;
+        write!(s, "{b:02x}").unwrap();
+    }
+    s
+}
+#[derive(Clone)]
+enum Position {
+    Var(String),
+    Constant(String),
+}
+type Atom = [Position; 3];
+#[derive(Default)]
+struct Compiler {
+    symbols: BTreeMap<String, String>,
+    types: BTreeMap<String, &'static str>,
+    actions: BTreeMap<String, String>,
+    parameters: BTreeMap<String, Vec<(String, String)>>,
+    notes: BTreeSet<String>,
+}
+impl Compiler {
+    fn constant(&mut self, raw: &str, iri_only: bool) -> anyhow::Result<String> {
+        let term = rdf_bindings::term(raw)?;
+        anyhow::ensure!(
+            !matches!(term, Term::BlankNode(_)),
+            "blank-node identity is outside the executable fragment"
+        );
+        anyhow::ensure!(
+            !iri_only || matches!(term, Term::NamedNode(_)),
+            "subject/predicate requires an IRI"
+        );
+        let canonical = term.to_string();
+        let key = symbol("t", &canonical);
+        self.types.insert(
+            key.clone(),
+            if matches!(term, Term::Literal(_)) {
+                "literal"
+            } else {
+                "iri"
+            },
+        );
+        self.symbols.insert(key.clone(), canonical);
+        Ok(key)
+    }
+    fn effect_position(
+        &mut self,
+        text: &str,
+        params: &BTreeSet<String>,
+        iri_only: bool,
+    ) -> anyhow::Result<Position> {
+        let t = text.trim();
+        if let Some(name) = t
+            .strip_prefix("<{")
+            .and_then(|s| s.strip_suffix("}>"))
+            .or_else(|| t.strip_prefix('{').and_then(|s| s.strip_suffix('}')))
+        {
+            anyhow::ensure!(params.contains(name), "undeclared action parameter {name}");
+            return Ok(Position::Var(name.into()));
         }
+        anyhow::ensure!(
+            !params.iter().any(|p| t.contains(&format!("{{{p}}}"))),
+            "partial effect template is unsupported"
+        );
+        Ok(Position::Constant(self.constant(t, iri_only)?))
     }
-    out.trim_matches('_').to_string()
-}
-
-/// Try to extract `(subject_param, predicate_iri, object_param)` from an
-/// SPARQL `ASK { <{a}> <pred> <{b}> }` precondition. Returns None for
-/// anything more complex.
-fn try_extract_ask_triple(precond: &str) -> Option<(String, String, String)> {
-    let trimmed = precond.trim();
-    if !trimmed.to_uppercase().starts_with("ASK") {
-        return None;
-    }
-    let open = trimmed.find('{')?;
-    let close = trimmed.rfind('}')?;
-    if close <= open {
-        return None;
-    }
-    let body = trimmed[open + 1..close].trim();
-    // Expect three IRIs / placeholders separated by whitespace, ending in `.` or not.
-    let stripped = body.trim_end_matches('.').trim();
-    let parts: Vec<&str> = stripped.split_whitespace().collect();
-    if parts.len() != 3 {
-        return None;
-    }
-    Some((parts[0].to_string(), parts[1].to_string(), parts[2].to_string()))
-}
-
-/// Translate a triple position (placeholder `<{x}>`, full IRI `<...>`, or bare
-/// `{x}`) into a PDDL term. Placeholders become `?x`; full IRIs become a
-/// stable constant identifier.
-fn position_to_pddl_term(pos: &str, notes: &mut Vec<String>) -> String {
-    let t = pos.trim();
-    // <{x}> or <{x}>
-    if let Some(inner) = t.strip_prefix("<{").and_then(|s| s.strip_suffix("}>")) {
-        return format!("?{}", inner);
-    }
-    if let Some(inner) = t.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
-        return format!("?{}", inner);
-    }
-    if let Some(inner) = t.strip_prefix('<').and_then(|s| s.strip_suffix('>')) {
-        return sanitise(inner);
-    }
-    notes.push(format!("untranslated term: {}", t));
-    sanitise(t)
-}
-
-fn effect_to_pddl(effect: &EffectSpec, notes: &mut Vec<String>) -> (bool, String) {
-    // Returns (positive?, pddl_atom).
-    match effect {
-        EffectSpec::AddTriple { subject, predicate, object } => {
-            let s = position_to_pddl_term(&format!("<{}>", subject.trim_matches(|c| c == '<' || c == '>')), notes);
-            let p = position_to_pddl_term(&format!("<{}>", predicate.trim_matches(|c| c == '<' || c == '>')), notes);
-            let o = position_to_pddl_term(&format!("<{}>", object.trim_matches(|c| c == '<' || c == '>')), notes);
-            (true, format!("(triple {} {} {})", s, p, o))
+    fn ask(&mut self, text: &str, params: &BTreeSet<String>) -> anyhow::Result<Vec<Atom>> {
+        let namespace = "urn:open-ontologies:pddl:parameter:";
+        anyhow::ensure!(
+            !text.contains(namespace),
+            "reserved compiler parameter namespace"
+        );
+        let values: Bindings = params
+            .iter()
+            .enumerate()
+            .map(|(i, p)| Ok((p.clone(), rdf_bindings::term(&format!("{namespace}{i}"))?)))
+            .collect::<anyhow::Result<_>>()?;
+        let rendered = rdf_bindings::render(text, &values, false)?;
+        let _ = rdf_bindings::prepare(text, &values)?;
+        let head = rdf_bindings::query_head(&rendered)?;
+        anyhow::ensure!(
+            head.text.eq_ignore_ascii_case("ASK"),
+            "only ASK triple-pattern preconditions are supported"
+        );
+        let tokens = rdf_bindings::tokens(&rendered)?;
+        let mut pos = tokens.iter().position(|t| t.start == head.start).unwrap() + 1;
+        if tokens
+            .get(pos)
+            .is_some_and(|t| t.text.eq_ignore_ascii_case("WHERE"))
+        {
+            pos += 1;
         }
-        EffectSpec::RemoveTriple { subject, predicate, object } => {
-            let s = position_to_pddl_term(&format!("<{}>", subject.trim_matches(|c| c == '<' || c == '>')), notes);
-            let p = position_to_pddl_term(&format!("<{}>", predicate.trim_matches(|c| c == '<' || c == '>')), notes);
-            let o = position_to_pddl_term(&format!("<{}>", object.trim_matches(|c| c == '<' || c == '>')), notes);
-            (false, format!("(triple {} {} {})", s, p, o))
+        anyhow::ensure!(
+            tokens.get(pos).is_some_and(|t| t.text == "{")
+                && tokens.last().is_some_and(|t| t.text == "}"),
+            "unsupported ASK dataset/modifier"
+        );
+        let body = &rendered[tokens[pos].end..tokens.last().unwrap().start];
+        let mut turtle = String::new();
+        let mut p = 0;
+        while tokens[p].start < head.start {
+            if tokens[p].text.eq_ignore_ascii_case("PREFIX") {
+                turtle.push_str(&format!(
+                    "@prefix {} {} .\n",
+                    tokens[p + 1].text,
+                    tokens[p + 2].text
+                ));
+                p += 3;
+            } else {
+                turtle.push_str(&format!("@base {} .\n", tokens[p + 1].text));
+                p += 2;
+            }
         }
-        EffectSpec::AddClass { iri } => {
-            let s = position_to_pddl_term(&format!("<{}>", iri.trim_matches(|c| c == '<' || c == '>')), notes);
-            let p = sanitise("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
-            let o = sanitise("http://www.w3.org/2002/07/owl#Class");
-            (true, format!("(triple {} {} {})", s, p, o))
+        turtle.push_str(body);
+        if rdf_bindings::tokens(body)?
+            .last()
+            .is_some_and(|t| t.text != ".")
+        {
+            turtle.push_str("\n.\n");
         }
+        let triples = GraphStore::parse_triples_ordered(&turtle, "turtle")?;
+        let reverse = values
+            .iter()
+            .map(|(p, t)| (t.to_string(), p.clone()))
+            .collect::<BTreeMap<_, _>>();
+        triples
+            .into_iter()
+            .map(|(s, p, o)| {
+                let mut atom = Vec::new();
+                for (i, t) in [s, p, o].iter().enumerate() {
+                    atom.push(if let Some(name) = reverse.get(t) {
+                        Position::Var(name.clone())
+                    } else {
+                        Position::Constant(self.constant(t, i < 2)?)
+                    });
+                }
+                Ok(atom.try_into().ok().unwrap())
+            })
+            .collect()
     }
-}
-
-/// Emit a PDDL `:action` block for the schema.
-fn schema_to_pddl_action(schema: &ActionSchema, notes: &mut Vec<String>) -> String {
-    let action_name = sanitise(&schema.name);
-    let params: Vec<String> = schema
-        .parameters
-        .iter()
-        .map(|p| format!("?{} - iri", p.name))
-        .collect();
-    let params_str = if params.is_empty() {
-        String::new()
-    } else {
-        format!(" {}", params.join(" "))
-    };
-
-    // Preconditions.
-    let mut precond_atoms: Vec<String> = Vec::new();
-    for precond in &schema.preconditions {
-        if let Some((s, p, o)) = try_extract_ask_triple(precond) {
-            let s_t = position_to_pddl_term(&s, notes);
-            let p_t = position_to_pddl_term(&p, notes);
-            let o_t = position_to_pddl_term(&o, notes);
-            precond_atoms.push(format!("(triple {} {} {})", s_t, p_t, o_t));
-        } else {
-            notes.push(format!(
-                "untranslated precondition for action `{}`: {}",
-                schema.name, precond
+    fn atom(atom: &Atom) -> String {
+        let terms = atom
+            .iter()
+            .map(|p| match p {
+                Position::Var(v) => format!("?{}", symbol("v", v)),
+                Position::Constant(c) => c.clone(),
+            })
+            .collect::<Vec<_>>();
+        format!("(triple {})", terms.join(" "))
+    }
+    fn action(&mut self, schema: &ActionSchema) -> anyhow::Result<String> {
+        anyhow::ensure!(
+            schema.outcomes.is_empty(),
+            "stochastic outcomes are unsupported"
+        );
+        let params = schema
+            .parameters
+            .iter()
+            .map(|p| p.name.clone())
+            .collect::<BTreeSet<_>>();
+        anyhow::ensure!(
+            params.len() == schema.parameters.len(),
+            "duplicate parameters"
+        );
+        let mut pre = Vec::new();
+        for q in &schema.preconditions {
+            pre.extend(self.ask(q, &params)?);
+        }
+        let mut effects = Vec::new();
+        for effect in &schema.effects {
+            let (s, p, o, add) = match effect {
+                EffectSpec::AddTriple {
+                    subject,
+                    predicate,
+                    object,
+                } => (subject.as_str(), predicate.as_str(), object.as_str(), true),
+                EffectSpec::RemoveTriple {
+                    subject,
+                    predicate,
+                    object,
+                } => (subject.as_str(), predicate.as_str(), object.as_str(), false),
+                EffectSpec::AddClass { iri } => (
+                    iri.as_str(),
+                    "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+                    "http://www.w3.org/2002/07/owl#Class",
+                    true,
+                ),
+            };
+            effects.push((
+                [
+                    self.effect_position(s, &params, true)?,
+                    self.effect_position(p, &params, true)?,
+                    self.effect_position(o, &params, false)?,
+                ],
+                add,
             ));
         }
-    }
-    let precond_block = if precond_atoms.is_empty() {
-        "()".to_string()
-    } else if precond_atoms.len() == 1 {
-        precond_atoms.remove(0)
-    } else {
-        format!("(and {})", precond_atoms.join(" "))
-    };
-
-    // Effects.
-    let mut effect_atoms: Vec<String> = Vec::new();
-    for effect in &schema.effects {
-        let (positive, atom) = effect_to_pddl(effect, notes);
-        if positive {
-            effect_atoms.push(atom);
-        } else {
-            effect_atoms.push(format!("(not {})", atom));
+        // A parameter used as a subject or predicate can never be a literal.
+        let mut iri_params = BTreeSet::new();
+        for atom in pre.iter().chain(effects.iter().map(|(a, _)| a)) {
+            for p in &atom[..2] {
+                if let Position::Var(v) = p {
+                    iri_params.insert(v.clone());
+                }
+            }
         }
+        let name = symbol("a", &schema.name);
+        anyhow::ensure!(!self.actions.contains_key(&name), "duplicate action name");
+        self.actions.insert(name.clone(), schema.name.clone());
+        self.parameters.insert(
+            name.clone(),
+            schema
+                .parameters
+                .iter()
+                .map(|p| (symbol("v", &p.name), p.name.clone()))
+                .collect(),
+        );
+        let parameters = schema
+            .parameters
+            .iter()
+            .map(|p| {
+                format!(
+                    "?{} - {}",
+                    symbol("v", &p.name),
+                    if iri_params.contains(&p.name) {
+                        "iri"
+                    } else {
+                        "rdf_term"
+                    }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let pre = pre.iter().map(Self::atom).collect::<Vec<_>>().join(" ");
+        // Preserve native delete-wins semantics even when different parameter
+        // names alias the same RDF term after grounding. Equality conditions
+        // depend only on operator arguments, never on an intermediate state.
+        let mut rendered = Vec::new();
+        for (atom, add) in &effects {
+            let value = Self::atom(atom);
+            if !*add {
+                rendered.push(format!("(not {value})"));
+                continue;
+            }
+            let mut guards = Vec::new();
+            let mut always_deleted = false;
+            for (delete, is_add) in &effects {
+                if *is_add {
+                    continue;
+                }
+                let mut differences = Vec::new();
+                let mut disjoint = false;
+                for (a, b) in atom.iter().zip(delete) {
+                    let term = |p: &Position| match p {
+                        Position::Var(v) => format!("?{}", symbol("v", v)),
+                        Position::Constant(c) => c.clone(),
+                    };
+                    match (a, b) {
+                        (Position::Constant(x), Position::Constant(y)) if x != y => {
+                            disjoint = true;
+                            break;
+                        }
+                        _ => {
+                            let x = term(a);
+                            let y = term(b);
+                            if x != y {
+                                differences.push(format!("(not (= {x} {y}))"));
+                            }
+                        }
+                    }
+                }
+                if disjoint {
+                    continue;
+                }
+                if differences.is_empty() {
+                    always_deleted = true;
+                    break;
+                }
+                guards.push(format!("(or {})", differences.join(" ")));
+            }
+            if always_deleted {
+                continue;
+            }
+            rendered.push(if guards.is_empty() {
+                value
+            } else {
+                format!("(when (and {}) {value})", guards.join(" "))
+            });
+        }
+        let rendered = rendered.join(" ");
+        Ok(format!(
+            "  (:action {name}\n    :parameters ({parameters})\n    :precondition (and {pre})\n    :effect (and {rendered}))"
+        ))
     }
-    let effect_block = if effect_atoms.is_empty() {
-        "()".to_string()
-    } else if effect_atoms.len() == 1 {
-        effect_atoms.remove(0)
-    } else {
-        format!("(and {})", effect_atoms.join(" "))
-    };
-
-    format!(
-        "  (:action {}\n   :parameters ({})\n   :precondition {}\n   :effect {})",
-        action_name,
-        params_str.trim(),
-        precond_block,
-        effect_block
-    )
+    fn facts(&mut self, facts: &[Triple], label: &str) -> Vec<String> {
+        facts
+            .iter()
+            .filter_map(|(s, p, o)| {
+                let atom: anyhow::Result<Atom> = (|| {
+                    Ok([
+                        Position::Constant(self.constant(s, true)?),
+                        Position::Constant(self.constant(p, true)?),
+                        Position::Constant(self.constant(o, false)?),
+                    ])
+                })();
+                match atom {
+                    Ok(a) => Some(Self::atom(&a)),
+                    Err(e) => {
+                        self.notes.insert(format!("{label}: {e}"));
+                        None
+                    }
+                }
+            })
+            .collect()
+    }
 }
 
-/// Compile a PDDL domain from a list of action schemas.
-pub fn compile_domain(domain_name: &str, schemas: &[ActionSchema]) -> CompiledPddl {
-    let mut notes: Vec<String> = Vec::new();
-    let mut actions: Vec<String> = Vec::new();
+/// Compile the pair together so every constant used by an action or problem
+/// is declared once. Older independent domain/problem helpers could not do so.
+pub fn compile(
+    domain_name: &str,
+    schemas: &[ActionSchema],
+    init: &[Triple],
+    goals: &[Triple],
+) -> CompiledPddl {
+    let mut c = Compiler::default();
+    let mut actions = Vec::new();
     for s in schemas {
-        actions.push(schema_to_pddl_action(s, &mut notes));
+        match c.action(s) {
+            Ok(a) => actions.push(a),
+            Err(e) => {
+                c.notes.insert(format!("action {}: {e}", s.name));
+            }
+        }
     }
-
+    let init = c.facts(init, "initial state");
+    let goals = c.facts(goals, "goal");
+    let declarations = c
+        .types
+        .iter()
+        .map(|(s, t)| format!("{s} - {t}"))
+        .collect::<Vec<_>>()
+        .join("\n    ");
+    let domain_symbol = symbol("d", domain_name);
     let domain = format!(
-        "(define (domain {})\n  (:requirements :strips :typing :negative-preconditions)\n  (:types iri)\n  (:predicates (triple ?s - iri ?p - iri ?o - iri))\n{}\n)",
-        sanitise(domain_name),
+        "(define (domain {domain_symbol})\n  (:requirements :strips :typing :equality :conditional-effects :disjunctive-preconditions :negative-preconditions)\n  (:types iri literal - rdf_term rdf_term - object)\n  (:constants {declarations})\n  (:predicates (triple ?s - iri ?p - iri ?o - rdf_term))\n{}\n)\n",
         actions.join("\n")
     );
-
-    // Problem stub — empty init/goal; the MCP layer fills in init from the
-    // loaded graph and goal from Turtle.
-    let problem = String::new();
-
-    CompiledPddl { domain, problem, translation_notes: notes }
-}
-
-/// Compile a PDDL problem instance. `init_facts` is the set of `(s, p, o)`
-/// IRIs that hold in the start state; `goal_facts` is the set that must hold
-/// in the post-state.
-pub fn compile_problem(
-    problem_name: &str,
-    domain_name: &str,
-    init_facts: &[(String, String, String)],
-    goal_facts: &[(String, String, String)],
-) -> String {
-    // Collect every distinct IRI to enumerate as objects.
-    let mut objs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for (s, p, o) in init_facts.iter().chain(goal_facts.iter()) {
-        objs.insert(sanitise(s));
-        objs.insert(sanitise(p));
-        objs.insert(sanitise(o));
+    let problem = format!(
+        "(define (problem rdf_problem)\n  (:domain {domain_symbol})\n  (:init {})\n  (:goal (and {}))\n)\n",
+        init.join(" "),
+        goals.join(" ")
+    );
+    CompiledPddl {
+        domain,
+        problem,
+        translation_complete: c.notes.is_empty(),
+        execution_ready: c.notes.is_empty(),
+        translation_notes: c.notes.into_iter().collect(),
+        symbols: c.symbols,
+        action_symbols: c.actions,
+        parameter_symbols: c.parameters,
     }
-    let objs_block: String = objs.into_iter().collect::<Vec<_>>().join(" ");
-
-    let init_block: String = init_facts
-        .iter()
-        .map(|(s, p, o)| format!("(triple {} {} {})", sanitise(s), sanitise(p), sanitise(o)))
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    let goal_block: String = if goal_facts.is_empty() {
-        "()".to_string()
-    } else {
-        let atoms: Vec<String> = goal_facts
-            .iter()
-            .map(|(s, p, o)| format!("(triple {} {} {})", sanitise(s), sanitise(p), sanitise(o)))
-            .collect();
-        if atoms.len() == 1 {
-            atoms[0].clone()
-        } else {
-            format!("(and {})", atoms.join(" "))
-        }
-    };
-
-    format!(
-        "(define (problem {})\n  (:domain {})\n  (:objects {} - iri)\n  (:init {})\n  (:goal {}))",
-        sanitise(problem_name),
-        sanitise(domain_name),
-        objs_block,
-        init_block,
-        goal_block
-    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dynamics::{ActionSchema, EffectSpec, Parameter};
-
-    fn rename_schema() -> ActionSchema {
+    use crate::dynamics::Parameter;
+    fn action() -> ActionSchema {
         ActionSchema {
-            name: "rename_class".to_string(),
+            name: "assign".into(),
             parameters: vec![
-                Parameter { name: "old".to_string(), type_iri: None },
-                Parameter { name: "new".to_string(), type_iri: None },
-            ],
-            preconditions: vec![
-                "ASK { <{old}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Class> }".to_string(),
-            ],
-            effects: vec![
-                EffectSpec::AddClass { iri: "{new}".to_string() },
-                EffectSpec::RemoveTriple {
-                    subject: "{old}".to_string(),
-                    predicate: "http://www.w3.org/1999/02/22-rdf-syntax-ns#type".to_string(),
-                    object: "http://www.w3.org/2002/07/owl#Class".to_string(),
+                Parameter {
+                    name: "target".into(),
+                    type_iri: None,
+                },
+                Parameter {
+                    name: "value".into(),
+                    type_iri: None,
                 },
             ],
+            preconditions: vec!["PREFIX x: <urn:> ASK { {target} a x:C }".into()],
+            effects: vec![EffectSpec::AddTriple {
+                subject: "{target}".into(),
+                predicate: "urn:p".into(),
+                object: "{value}".into(),
+            }],
             reversible: false,
             description: None,
             outcomes: vec![],
         }
     }
-
     #[test]
-    fn sanitise_strips_iri_punctuation() {
-        let out = sanitise("http://www.w3.org/2002/07/owl#Class");
-        assert!(!out.contains('/'));
-        assert!(!out.contains(':'));
-        assert!(!out.contains('#'));
-        assert!(out.contains("class") || out.contains("Class") || out.ends_with("class"));
+    fn type_shorthand_equals_explicit_iri() {
+        let a = action();
+        let mut b = a.clone();
+        b.preconditions[0] = b.preconditions[0]
+            .replace(" a ", " <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ");
+        let x = compile("d", &[a], &[], &[]);
+        let y = compile("d", &[b], &[], &[]);
+        assert!(x.translation_complete);
+        assert_eq!(x.domain, y.domain);
     }
-
     #[test]
-    fn try_extract_ask_triple_pulls_three_terms() {
-        let q = "ASK { <{old}> <http://x.org/p> <http://x.org/q> }";
-        let parsed = try_extract_ask_triple(q).expect("parsed");
-        assert_eq!(parsed.0, "<{old}>");
-        assert_eq!(parsed.1, "<http://x.org/p>");
-        assert_eq!(parsed.2, "<http://x.org/q>");
+    fn symbols_are_injective_and_reversible() {
+        let mut a = action();
+        a.name = "Case-A".into();
+        let mut b = a.clone();
+        b.name = "case_a".into();
+        let facts = vec![("urn:A-B".into(), "urn:p".into(), "urn:a_b".into())];
+        let c = compile("d", &[a, b], &facts, &[]);
+        assert!(c.translation_complete);
+        assert_eq!(c.action_symbols.len(), 2);
+        assert!(c.symbols.values().any(|v| v == "<urn:A-B>"));
+        assert!(c.symbols.values().any(|v| v == "<urn:a_b>"));
+        for (k, v) in &c.symbols {
+            assert_eq!(k, &symbol("t", v));
+        }
     }
-
     #[test]
-    fn try_extract_ask_returns_none_for_select() {
-        let q = "SELECT ?x WHERE { ?x a <http://www.w3.org/2002/07/owl#Class> }";
-        assert!(try_extract_ask_triple(q).is_none());
+    fn literals_have_declared_symbols_and_do_not_escape_pddl() {
+        let facts = vec![(
+            "urn:s".into(),
+            "urn:p".into(),
+            "\"a ) ( injected\"@en".into(),
+        )];
+        let c = compile("d", &[action()], &facts, &facts);
+        assert!(c.execution_ready);
+        assert!(c.domain.contains(" - literal"));
+        assert!(!c.problem.contains("injected"));
+        assert!(c.symbols.values().any(|v| v.contains("injected")));
     }
-
     #[test]
-    fn compile_domain_emits_typed_action_with_pddl_keywords() {
-        let schemas = vec![rename_schema()];
-        let compiled = compile_domain("ontology", &schemas);
-        assert!(compiled.domain.contains("(define (domain ontology)"));
-        assert!(compiled.domain.contains(":requirements :strips :typing"));
-        assert!(compiled.domain.contains("(:predicates (triple"));
-        assert!(compiled.domain.contains("(:action rename_class"));
-        assert!(compiled.domain.contains("?old - iri"));
-        assert!(compiled.domain.contains("?new - iri"));
-        assert!(compiled.domain.contains(":precondition (triple ?old"));
-        assert!(compiled.domain.contains(":effect (and"));
-        assert!(compiled.domain.contains("(not (triple ?old"));
-    }
-
-    #[test]
-    fn unparseable_precondition_is_recorded_in_notes() {
-        let mut s = rename_schema();
-        s.preconditions.push("SELECT ?x WHERE { ?x ?p ?o }".to_string());
-        let compiled = compile_domain("d", &[s]);
-        assert!(
-            compiled.translation_notes.iter().any(|n| n.contains("untranslated precondition")),
-            "expected a translation note for SELECT-shaped precondition; got: {:?}",
-            compiled.translation_notes
+    fn unsupported_sparql_and_blank_nodes_are_never_execution_ready() {
+        for condition in [
+            "SELECT ?s WHERE { ?s ?p ?o }",
+            "ASK { ?s ?p ?o FILTER(?o>1) }",
+            "ASK { GRAPH <urn:g> { <urn:s> <urn:p> <urn:o> } }",
+        ] {
+            let mut a = action();
+            a.preconditions = vec![condition.into()];
+            let c = compile("d", &[a], &[], &[]);
+            assert!(!c.execution_ready && !c.translation_notes.is_empty());
+        }
+        let c = compile(
+            "d",
+            &[],
+            &[("_:b".into(), "urn:p".into(), "urn:o".into())],
+            &[],
         );
+        assert!(!c.execution_ready);
+    }
+    #[test]
+    fn declarations_cover_every_problem_constant_once() {
+        let f = vec![("urn:s".into(), "urn:p".into(), "\"x\"".into())];
+        let c = compile("d", &[action()], &f, &f);
+        assert!(c.execution_ready);
+        for k in c.symbols.keys() {
+            assert_eq!(c.domain.matches(&format!("{k} - ")).count(), 1);
+        }
     }
 
     #[test]
-    fn compile_problem_renders_objects_init_and_goal() {
-        let init = vec![(
-            "http://ex.org/Cat".to_string(),
-            "http://www.w3.org/1999/02/22-rdf-syntax-ns#type".to_string(),
-            "http://www.w3.org/2002/07/owl#Class".to_string(),
-        )];
-        let goal = vec![(
-            "http://ex.org/Feline".to_string(),
-            "http://www.w3.org/1999/02/22-rdf-syntax-ns#type".to_string(),
-            "http://www.w3.org/2002/07/owl#Class".to_string(),
-        )];
-        let problem = compile_problem("rename_cat", "ontology", &init, &goal);
-        assert!(problem.contains("(:domain ontology)"));
-        assert!(problem.contains(":init (triple"));
-        assert!(problem.contains(":goal (triple"));
-        assert!(problem.contains("- iri"));
+    fn different_parameter_names_can_alias_a_deleted_triple() {
+        let mut a = action();
+        a.effects = vec![
+            EffectSpec::AddTriple {
+                subject: "{target}".into(),
+                predicate: "urn:p".into(),
+                object: "urn:o".into(),
+            },
+            EffectSpec::RemoveTriple {
+                subject: "{value}".into(),
+                predicate: "urn:p".into(),
+                object: "urn:o".into(),
+            },
+        ];
+        let c = compile("d", &[a], &[], &[]);
+        assert!(c.execution_ready);
+        assert!(c.domain.contains("(when (and (or (not (= ?v_"));
     }
 }

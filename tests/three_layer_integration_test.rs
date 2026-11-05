@@ -15,7 +15,7 @@ use open_ontologies::dynamics::{
     list_names, lookup, register, ActionSchema, EffectSpec, Parameter,
 };
 use open_ontologies::graph::GraphStore;
-use open_ontologies::plan_pddl::{compile_domain, compile_problem};
+use open_ontologies::plan_pddl::compile;
 use open_ontologies::state::StateDb;
 use std::sync::Arc;
 use tempfile::NamedTempFile;
@@ -66,16 +66,18 @@ fn dynamics_register_then_planner_compile_sees_the_schema() {
     assert!(names.contains(&"add_subclass_edge".to_string()));
 
     // The Planner pulls schemas by lookup. Round-trip must preserve enough
-    // structure for compile_domain to emit a well-formed action block.
+    // structure for compile to emit a matched domain/problem pair.
     let recovered = lookup(&db, "add_subclass_edge")
         .expect("lookup ok")
         .expect("schema found");
-    let compiled = compile_domain("ontology", &[recovered]);
-    assert!(compiled.domain.contains("(:action add_subclass_edge"));
-    assert!(compiled.domain.contains("?child - iri"));
-    assert!(compiled.domain.contains("?parent - iri"));
+    let compiled = compile("ontology", &[recovered], &[], &[]);
+    let (operator, _) = compiled.action_symbols.iter().next().unwrap();
+    assert!(compiled.domain.contains(&format!("(:action {operator}")));
+    for (parameter, _) in &compiled.parameter_symbols[operator] {
+        assert!(compiled.domain.contains(&format!("?{parameter} - iri")));
+    }
     // Both ASK preconditions should translate.
-    assert!(compiled.domain.contains(":precondition (and (triple ?child"));
+    assert!(compiled.domain.contains(":precondition (and (triple ?v_"));
     // No untranslated notes for fully ASK-shaped schemas.
     assert!(compiled.translation_notes.is_empty(),
         "unexpected translation notes: {:?}", compiled.translation_notes);
@@ -186,12 +188,14 @@ fn planner_problem_includes_goal_triples_in_pddl() {
         "http://ex.org/Animal".to_string(),
     )];
 
-    let problem = compile_problem("ex_problem", "ontology", &init, &goal);
-    assert!(problem.contains("(:domain ontology)"));
-    assert!(problem.contains(":init (triple"));
-    assert!(problem.contains(":goal (triple"));
-    // Sanitised IRI should appear in objects.
-    assert!(problem.contains("http___ex_org_cat") || problem.contains("ex_org_cat"));
+    let compiled = compile("ontology", &[], &init, &goal);
+    assert!(compiled.execution_ready);
+    assert!(compiled.problem.contains("(:domain d_"));
+    assert!(compiled.problem.contains(":init (triple"));
+    assert!(compiled.problem.contains(":goal (and (triple"));
+    let cat = compiled.symbols.iter().find(|(_, v)| v.as_str() == "<http://ex.org/Cat>").unwrap().0;
+    assert!(compiled.problem.contains(cat));
+    assert!(compiled.domain.contains(&format!("{cat} - iri")));
 }
 
 #[test]

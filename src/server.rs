@@ -2197,91 +2197,86 @@ impl OpenOntologiesServer {
         }
     }
 
-    #[tool(name = "onto_plan_compile_pddl", description = "Compile a PDDL domain from registered Dynamics action schemas (#43) plus a problem instance from the loaded graph and a goal Turtle slice (#45 Planner stub). Returns {domain, problem, translation_notes}. The actual planner (Fast Downward) is wrapped client-side per the LLM-Modulo convention — this primitive only emits the PDDL. Lossy in the v0.4 stub: only ASK-shape SPARQL preconditions translate cleanly; SELECT-shaped preconditions are preserved as notes.")]
-    async fn onto_plan_compile_pddl(&self, Parameters(input): Parameters<OntoPlanCompilePddlInput>) -> String {
-        // Gather schemas — either explicitly requested or every registered one.
-        let names = if input.action_names.is_empty() {
-            match crate::dynamics::list_names(&self.db) {
-                Ok(n) => n,
-                Err(e) => return Self::err_json(e),
+    #[tool(name = "onto_plan_compile_pddl", description = "Compile a matched PDDL domain/problem for deterministic finite RDF actions with positive ASK triple patterns, declared IRI/literal constants and reversible symbol maps. Preserves native add/remove alias semantics. Unsupported SPARQL, blank nodes, stochastic outcomes or unencoded native guards make execution_ready false. No general OWL or external-planner availability claim.")]
+    async fn onto_plan_compile_pddl(
+        &self,
+        Parameters(input): Parameters<OntoPlanCompilePddlInput>,
+    ) -> String {
+        let result = (|| -> anyhow::Result<serde_json::Value> {
+            let names = if input.action_names.is_empty() {
+                crate::dynamics::list_names(&self.db)?
+            } else {
+                input.action_names
+            };
+            let mut schemas = Vec::new();
+            let mut seen = std::collections::BTreeSet::new();
+            for name in &names {
+                anyhow::ensure!(seen.insert(name), "duplicate action name {name}");
+                schemas.push(
+                    crate::dynamics::lookup(&self.db, name)?
+                        .ok_or_else(|| anyhow::anyhow!("unknown action {name}"))?,
+                );
             }
-        } else {
-            input.action_names
-        };
-        let mut schemas: Vec<crate::dynamics::ActionSchema> = Vec::with_capacity(names.len());
-        for n in &names {
-            match crate::dynamics::lookup(&self.db, n) {
-                Ok(Some(s)) => schemas.push(s),
-                Ok(None) => return Self::err_json(format!("unknown action: {}", n)),
-                Err(e) => return Self::err_json(e),
+            let raw = self
+                .graph
+                .sparql_select("SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 10001")?;
+            let value: serde_json::Value = serde_json::from_str(&raw)?;
+            let rows = value["results"]
+                .as_array()
+                .ok_or_else(|| anyhow::anyhow!("planning snapshot has no result rows"))?;
+            anyhow::ensure!(
+                rows.len() <= 10000,
+                "planning snapshot exceeds 10,000 triples; no silent truncation"
+            );
+            let init = rows
+                .iter()
+                .map(|r| {
+                    Ok((
+                        r["s"]
+                            .as_str()
+                            .ok_or_else(|| anyhow::anyhow!("missing subject"))?
+                            .to_string(),
+                        r["p"]
+                            .as_str()
+                            .ok_or_else(|| anyhow::anyhow!("missing predicate"))?
+                            .to_string(),
+                        r["o"]
+                            .as_str()
+                            .ok_or_else(|| anyhow::anyhow!("missing object"))?
+                            .to_string(),
+                    ))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            let goals = match input.goal_ttl.as_deref() {
+                Some(t) if !t.trim().is_empty() => {
+                    crate::graph::GraphStore::parse_triples_ordered(t, "turtle")?
+                }
+                _ => Vec::new(),
+            };
+            let mut compiled = crate::plan_pddl::compile(
+                input.domain_name.as_deref().unwrap_or("ontology"),
+                &schemas,
+                &init,
+                &goals,
+            );
+            let policies = !crate::policy::list_rules(&self.db)?.is_empty();
+            let invariants = !crate::dynamics_bcplus::list_invariants(&self.db)?.is_empty();
+            if policies || invariants {
+                compiled.execution_ready = false;
+                compiled.translation_notes.push("Native policies/invariants are not encoded in this planning fragment; actual apply rechecks them".into());
             }
+            Ok(
+                serde_json::json!({"domain":compiled.domain,"problem":compiled.problem,"translation_notes":compiled.translation_notes,
+                "translation_complete":compiled.translation_complete,"execution_ready":compiled.execution_ready,
+                "execution_scope":"finite deterministic positive triple-pattern actions over the default graph; no OWL entailment or external planner availability claim",
+                "symbols":compiled.symbols,"action_symbols":compiled.action_symbols,"parameter_symbols":compiled.parameter_symbols,
+                "actions_included":names,"init_facts_count":init.len(),"goal_facts_count":goals.len()}),
+            )
+        })();
+        match result {
+            Ok(body) => body.to_string(),
+            Err(e) => Self::err_json(e),
         }
-
-        let domain_name = input.domain_name.unwrap_or_else(|| "ontology".to_string());
-        let compiled = crate::plan_pddl::compile_domain(&domain_name, &schemas);
-
-        // Init facts: enumerate every triple in the loaded graph as a (s, p, o).
-        let init_facts: Vec<(String, String, String)> = match self
-            .graph
-            .sparql_select("SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 10000")
-        {
-            Ok(s) => {
-                let v: serde_json::Value = serde_json::from_str(&s).unwrap_or(serde_json::Value::Null);
-                v["results"].as_array().cloned().unwrap_or_default()
-                    .into_iter()
-                    .filter_map(|row| {
-                        let s = row["s"].as_str()?.to_string();
-                        let p = row["p"].as_str()?.to_string();
-                        let o = row["o"].as_str()?.to_string();
-                        Some((s, p, o))
-                    })
-                    .collect()
-            }
-            Err(_) => Vec::new(),
-        };
-
-        // Goal facts: parse goal_ttl by loading into a scratch graph.
-        let goal_facts: Vec<(String, String, String)> = match input.goal_ttl.as_deref() {
-            Some(ttl) if !ttl.trim().is_empty() => {
-                let temp = crate::graph::GraphStore::new();
-                if temp.load_turtle(ttl, None).is_err() {
-                    return r#"{"error":"goal_ttl failed to parse"}"#.to_string();
-                }
-                match temp.sparql_select("SELECT ?s ?p ?o WHERE { ?s ?p ?o }") {
-                    Ok(s) => {
-                        let v: serde_json::Value = serde_json::from_str(&s).unwrap_or(serde_json::Value::Null);
-                        v["results"].as_array().cloned().unwrap_or_default()
-                            .into_iter()
-                            .filter_map(|row| {
-                                let s = row["s"].as_str()?.to_string();
-                                let p = row["p"].as_str()?.to_string();
-                                let o = row["o"].as_str()?.to_string();
-                                Some((s, p, o))
-                            })
-                            .collect()
-                    }
-                    Err(_) => Vec::new(),
-                }
-            }
-            _ => Vec::new(),
-        };
-
-        let problem = crate::plan_pddl::compile_problem(
-            "ontology_problem",
-            &domain_name,
-            &init_facts,
-            &goal_facts,
-        );
-
-        let body = serde_json::json!({
-            "domain": compiled.domain,
-            "problem": problem,
-            "translation_notes": compiled.translation_notes,
-            "actions_included": names,
-            "init_facts_count": init_facts.len(),
-            "goal_facts_count": goal_facts.len(),
-        });
-        body.to_string()
     }
 
     #[tool(name = "onto_reason", description = "Run inference over the loaded ontology. Profiles: 'rdfs' (subclass, domain/range), 'owl-rl' (+ transitive/symmetric/inverse, sameAs, equivalentClass), 'owl-rl-ext' (+ someValuesFrom, allValuesFrom, hasValue, intersectionOf, unionOf), 'owl-dl' (SHIQ tableaux: satisfiability, classification, qualified number restrictions with node merging, inverse/symmetric roles, functional properties, parallel agent-based classification, explanation traces, ABox reasoning. Nominals are not implemented: owl:oneOf is not read and owl:hasValue is approximated as an atomic concept, so an ontology that uses either returns undetermined classes rather than a classification. Datatype ranges are skipped). Materializes inferred triples. Set `inference_graph` to keep them in a separate graph, where nothing downstream can read an inference as an assertion and a Turtle/RDF-XML save cannot publish one. Pass `rules_file` to evaluate a SUPPLIED Horn rule table instead of a built-in profile: it needs `certificate_dir`, materialises nothing, and writes a certificate the proved-sound Lean checker verifies with `lake exe oo-horn check`. The verdict comes from that checker and not from here, because rules you supply are assumed and never checked: a conclusion then holds in every model of the asserted graph that ALSO satisfies your rules. With `certificate_dir` the run ALSO looks for a contradiction in the closure it reached, and writes refutation.tsv when it finds one the Lean refutation checker can judge: `lake exe oo-refute check`, or `oo-refute guard` which refuses the derivation certificate over a graph it can refute. Seventeen OWL 2 RL rules conclude false, ten are detected here and exactly ONE, cax-dw, is certifiable, because OOCert.RefuteConditions carries a semantic condition for that rule alone. The other nine are reported as `clash_found_by_this_engine` with no file written, and that word is not the checker's `unsatisfiable_under_disjointness`: an engine opinion and a machine-checked result never share a string here. cax-dw needs an INDIVIDUAL in two disjoint classes, so a TBox unsatisfiable with no individual asserted is invisible to this route; profile 'owl-dl' sees that case and its answer carries no certificate. No clash found is never a consistency result. Every report carries `scope`, the graphs the run READ, and a certificate directory also gets `scope.tsv`: the Lean checkers verify the steps against the triples in asserted.tsv and cannot ask where those triples came from, so a certificate over one snapshot and a certificate over the union of every version are indistinguishable as files and only one is about a state that existed. Over a store that describes its named graphs with the temporal vocabulary (https://open-ontologies.org/temporal#), a run with no instant named is REFUSED: pass `valid_at`, `as_of` or `all_versions: true`. NO run over a versioned store materialises and it says so, whether scoped or `all_versions`: the default graph and an undescribed inference graph are both in scope at every instant, so a conclusion written to either becomes an axiom of every snapshot, and an `all_versions` closure was drawn from a state that held at no instant. Pass `materialize: false`. A scoped run also drops any graph holding this engine's own materialised inferences from what it reads, and records the drop. Scoped runs are not available for 'owl-dl'.")]

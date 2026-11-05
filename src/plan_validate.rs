@@ -3,7 +3,7 @@
 
 //! Plan validator (#45, LLM-Modulo `Validator` role).
 //!
-//! Companion to [`crate::plan_pddl::compile_domain`]. The compile primitive
+//! Companion to [`crate::plan_pddl::compile`]. The compile primitive
 //! emits PDDL for an external solver (the orchestrator's responsibility per
 //! the LLM-Modulo convention); this validator consumes the solver's output
 //! and checks step-by-step that each operator is applicable to the cumulative
