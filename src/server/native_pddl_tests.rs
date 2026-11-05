@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 佐々木隆志 (Takashi Sasaki) <takashi316@gmail.com> (https://x.com/TakashiSasaki)
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 佐々木隆志 (Takashi Sasaki) <takashi316@gmail.com> (https://x.com/TakashiSasaki)
-use open_ontologies::{
+use crate::{
     dynamics::{self, ActionSchema, EffectSpec},
     graph::GraphStore,
     inputs::OntoPlanCompilePddlInput,

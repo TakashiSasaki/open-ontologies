@@ -3646,3 +3646,7 @@ impl ServerHandler for OpenOntologiesServer {
             ))
     }
 }
+
+#[cfg(test)]
+#[path = "server/native_pddl_tests.rs"]
+mod native_pddl_tests;
