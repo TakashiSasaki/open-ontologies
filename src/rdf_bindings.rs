@@ -109,27 +109,27 @@ pub fn render(template: &str, values: &Bindings, variables: bool) -> anyhow::Res
             continue;
         }
         let mut key = None;
-        if bytes[i] == b'<' {
-            if let Some(end) = template[i + 1..].find('>') {
-                let end = i + 1 + end;
-                if !template[i + 1..end].chars().any(char::is_whitespace) {
-                    let inner = &template[i + 1..end];
-                    if inner.starts_with('{')
-                        && inner.ends_with('}')
-                        && identifier(&inner[1..inner.len() - 1])
-                    {
-                        key = Some(inner[1..inner.len() - 1].to_string());
-                    } else {
-                        anyhow::ensure!(
-                            !known_placeholder(inner, values),
-                            "partial IRI template is unsupported"
-                        );
-                    }
-                    i = end + 1;
-                    if key.is_none() {
-                        out.push_str(&template[start..i]);
-                        continue;
-                    }
+        if bytes[i] == b'<'
+            && let Some(end) = template[i + 1..].find('>')
+        {
+            let end = i + 1 + end;
+            if !template[i + 1..end].chars().any(char::is_whitespace) {
+                let inner = &template[i + 1..end];
+                if inner.starts_with('{')
+                    && inner.ends_with('}')
+                    && identifier(&inner[1..inner.len() - 1])
+                {
+                    key = Some(inner[1..inner.len() - 1].to_string());
+                } else {
+                    anyhow::ensure!(
+                        !known_placeholder(inner, values),
+                        "partial IRI template is unsupported"
+                    );
+                }
+                i = end + 1;
+                if key.is_none() {
+                    out.push_str(&template[start..i]);
+                    continue;
                 }
             }
         }
@@ -217,8 +217,7 @@ pub fn tokens(text: &str) -> anyhow::Result<Vec<Token>> {
             continue;
         }
         let start = i;
-        let kind;
-        if b[i] == b'"' || b[i] == b'\'' {
+        let kind = if b[i] == b'"' || b[i] == b'\'' {
             let q = b[i];
             let width = if b.get(i..i + 3) == Some(&[q, q, q]) {
                 3
@@ -242,17 +241,17 @@ pub fn tokens(text: &str) -> anyhow::Result<Vec<Token>> {
                 i += 1;
             }
             anyhow::ensure!(closed, "unterminated query literal");
-            kind = TokenKind::Literal;
+            TokenKind::Literal
         } else if b[i] == b'<'
             && text[i + 1..]
                 .find('>')
                 .is_some_and(|n| !text[i + 1..i + 1 + n].chars().any(char::is_whitespace))
         {
             i += text[i + 1..].find('>').unwrap() + 2;
-            kind = TokenKind::Iri;
+            TokenKind::Iri
         } else if b"{}()[];,<>=!|^&.+*/".contains(&b[i]) {
             i += 1;
-            kind = TokenKind::Symbol;
+            TokenKind::Symbol
         } else {
             while i < b.len()
                 && !b[i].is_ascii_whitespace()
@@ -263,8 +262,8 @@ pub fn tokens(text: &str) -> anyhow::Result<Vec<Token>> {
             if i == start {
                 i += 1;
             }
-            kind = TokenKind::Word;
-        }
+            TokenKind::Word
+        };
         out.push(Token {
             text: text[start..i].into(),
             start,
