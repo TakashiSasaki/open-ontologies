@@ -16,6 +16,8 @@ on:
       - '.cargo/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'build.rs'
+      - 'scripts/build-native-image.sh'
       - 'src/**'
       - '.github/workflows/docker.yml'
 
@@ -49,6 +51,15 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
+      - name: Identify the native fork build
+        id: native
+        run: |
+          set -euo pipefail
+          revision=$(git rev-parse --verify HEAD)
+          base=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "version=$base+local.${revision:0:12}" >> "$GITHUB_OUTPUT"
+
       # Build into the local daemon so the image can be run. A plain build only
       # proves the layers assemble; running the binary proves the dynamic
       # linker can resolve every shared library, which is exactly what was
@@ -67,6 +78,9 @@ jobs:
           context: .
           load: true
           tags: open-ontologies:ci
+          build-args: |
+            BUILD_VERSION=${{ steps.native.outputs.version }}
+            SOURCE_REVISION=${{ steps.native.outputs.revision }}
 
       - name: Smoke test (binary starts, all shared libs resolve)
         run: docker run --rm open-ontologies:ci --help
@@ -75,10 +89,12 @@ jobs:
       # first, so it is known to work in the distroless image before a tag
       # depends on it. An explicit data dir, because `status` creates its store
       # and the answer must not depend on HOME being writable in the image.
-      - name: The image reports the version in Cargo.toml
+      - name: The image reports its native fork identity
+        env:
+          EXPECTED_BUILD_VERSION: ${{ steps.native.outputs.version }}
         run: |
           set -euo pipefail
-          want=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          want=$EXPECTED_BUILD_VERSION
           got=$(docker run --rm open-ontologies:ci --no-connect --data-dir /tmp/oo status \
             | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')
           echo "Cargo.toml says $want; the image reports $got"

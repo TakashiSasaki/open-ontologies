@@ -553,6 +553,14 @@ jobs:
           df -h
       - name: Set up Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Identify the native fork build
+        id: native
+        run: |
+          set -euo pipefail
+          revision=$(git rev-parse --verify HEAD)
+          base=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "version=$base+local.${revision:0:12}" >> "$GITHUB_OUTPUT"
       - name: Build the image from the tagged tree, with no cache
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -560,9 +568,14 @@ jobs:
           load: true
           no-cache: true
           tags: open-ontologies:release
+          build-args: |
+            BUILD_VERSION=${{ steps.native.outputs.version }}
+            SOURCE_REVISION=${{ steps.native.outputs.revision }}
       - name: Smoke test (binary starts, all shared libs resolve)
         run: docker run --rm open-ontologies:release --help
       - name: The image reports the version of its release
+        env:
+          EXPECTED_BUILD_VERSION: ${{ steps.native.outputs.version }}
         run: |
           set -euo pipefail
           # An explicit data dir, so the answer does not depend on HOME being
@@ -570,7 +583,7 @@ jobs:
           got=$(docker run --rm open-ontologies:release --no-connect --data-dir /tmp/oo status \
             | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')
           echo "release $VERSION; the image reports $got"
-          [ "$got" = "$VERSION" ] || { echo "::error::the image reports $got and the release claims $VERSION"; exit 1; }
+          [ "$got" = "$EXPECTED_BUILD_VERSION" ] || { echo "::error::the image reports $got and the fork build claims $EXPECTED_BUILD_VERSION"; exit 1; }
       - name: Log in to GHCR
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
@@ -593,5 +606,11 @@ jobs:
         with:
           context: .
           push: true
+          build-args: |
+            BUILD_VERSION=${{ steps.native.outputs.version }}
+            SOURCE_REVISION=${{ steps.native.outputs.revision }}
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            org.opencontainers.image.version=${{ steps.native.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.native.outputs.revision }}

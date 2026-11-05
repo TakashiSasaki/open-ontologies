@@ -94,8 +94,8 @@ fn a_tagged_commit_declares_the_version_of_its_tag() {
     };
 
     assert_eq!(
-        compiled_version(),
-        tag.trim_start_matches('v'),
+        compiled_version().split('+').next().unwrap(),
+        tag.trim_start_matches('v').split('+').next().unwrap(),
         "HEAD carries tag {tag} and Cargo.toml says {}. A binary built from this exact commit \
          would report a version that is not the release it came from.",
         compiled_version()
