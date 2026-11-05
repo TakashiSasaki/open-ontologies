@@ -12,6 +12,18 @@ repositories.
 - Plan: [docs/NATIVE-MCP-PLAN.md](docs/NATIVE-MCP-PLAN.md).
 - Verification and image identities: [docs/NATIVE-MCP-VERIFICATION.md](docs/NATIVE-MCP-VERIFICATION.md).
 
+## Future implementation policy
+
+The operator's policy, confirmed on 2026-11-05, is to implement improvements in
+the generic compatibility proxy or dedicated Open Ontologies adapter whenever
+those layers can provide the required behavior correctly. This fork is modified
+only when native engine changes are necessary. An existing fork and permission
+to publish it do not change that choice.
+
+For each native proposal, record the guarantee a proxy cannot provide and keep
+the native change to that responsibility. Split mixed improvements across the
+appropriate projects.
+
 ## Implemented engine changes
 
 1. Native graph writes use fail-closed policy decisions over validated RDF

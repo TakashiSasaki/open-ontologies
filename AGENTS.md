@@ -3,6 +3,12 @@
 - Read `FORK.md` for the upstream base, plan and current verification scope.
 - Keep generic protocol/proxy work in the separate adapter projects. Do not
   publish host credentials, actual requests, registries or deployment data.
+- User policy (2026-11-05): implement improvements in the generic proxy or
+  dedicated Open Ontologies adapter whenever those layers can provide the
+  required behavior correctly. Modify this native fork only when an engine
+  change is necessary. Existing fork/publication authorization does not change
+  that boundary. Record why the proxy cannot provide the required guarantee
+  before planning a native change, and split mixed work by responsibility.
 - `patches/proposed-native/` contains proposals for an older exact base. They
   are not automatically applied or freshly qualified engine source. Preserve
   their provenance and describe any changes made while rebasing.
