@@ -40,6 +40,12 @@ try:
     assert call('onto_action_list')==[], 'QA requires empty action registry'
     assert call('onto_policy_list')==[], 'QA requires empty policy registry'
     tools=c.tools();checks.append('native_catalog_and_fork_identity')
+    # A second session must share the first session's metadata authority.
+    peer=m.Client(a.url, modern=False)
+    peer.rpc('initialize', {'protocolVersion':'2025-06-18','capabilities':{},'clientInfo':{'name':'native-peer-qa','version':'1'}})
+    peer.rpc('notifications/initialized',notification=True)
+    peer.close()
+    checks.append('multiple_HTTP_sessions_share_one_policy_authority')
     invalid=call('onto_validate',{'input':'broken turtle','inline':True});assert invalid['valid'] is False
     call('onto_policy_check',{'target_iris':['not an IRI']},error=True)
     checks.append('MCP_error_flag_and_valid_negative_findings')

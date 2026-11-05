@@ -32,6 +32,7 @@ struct BatchCmd {
 
 impl BatchRunner {
     pub fn new(db: StateDb, graph: Arc<GraphStore>, pretty: bool) -> Self {
+        graph.bind_policy_db(db.clone());
         Self { db, graph, pretty, human: false, in_daemon: false }
     }
 
