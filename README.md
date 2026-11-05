@@ -316,3 +316,9 @@ successful lookup remains an empty mapping result. `inspect-runtime` observes
 distinguishing missing, unknown and present-unverified. It never equates file
 presence with correct Parquet, clinically validated mappings or a tested lookup.
 Run it with the exact `--image-id` and observed `--native-version`.
+
+Application errors with a service `error_code` also retain that category in
+`application_error.code`. A real connected-app call showed its facade replacing
+the structured result's top-level `error_code` with `INVALID_ARGUMENT`, while the
+text content retained `dependency_unavailable`. The nested category avoids this
+collision. Existing upstream `application_error` extensions are preserved.

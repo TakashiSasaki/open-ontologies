@@ -96,6 +96,13 @@ func (a *Adapter) decorate(name string, args object, raw json.RawMessage) json.R
 			p["hint"] = marshal("Configure [general] ontology_dirs or OPEN_ONTOLOGIES_ONTOLOGY_DIRS inside the backend container (for example a managed /data/ontologies directory). Compilation cache is not a source repository and is not searched automatically. Use onto_cache_list for compiled-cache entries.")
 			changed = true
 		}
+		// Some connected-app facades replace a top-level error_code with their
+		// own transport taxonomy. Retain the application category under its own
+		// object as well, without overwriting an upstream extension.
+		if str(p, "error_code") != "" && !supplied(p, "application_error") {
+			p["application_error"] = marshal(object{"code": p["error_code"], "source": marshal("open_ontologies")})
+			changed = true
+		}
 		if changed {
 			blocks[0]["text"] = marshal(string(marshal(p)))
 			result["content"] = marshal(blocks)

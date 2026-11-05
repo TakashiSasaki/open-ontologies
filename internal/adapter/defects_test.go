@@ -189,12 +189,27 @@ func TestClinicalDependencyErrorsStayErrors(t *testing.T) {
 		if !boolean(envelope, "isError") || str(p, "error_code") != "dependency_unavailable" || str(p, "dependency") != "clinical_crosswalk" {
 			t.Fatal(string(r))
 		}
+		var application object
+		_ = json.Unmarshal(p["application_error"], &application)
+		if str(application, "code") != "dependency_unavailable" {
+			t.Fatal("application category was not retained", string(r))
+		}
 	}
 	r := a.decorate("onto_crosswalk", object{}, jsonTool(object{"mappings": marshal([]any{})}))
 	var envelope object
 	_ = json.Unmarshal(r, &envelope)
 	if boolean(envelope, "isError") {
 		t.Fatal("valid empty mappings became an error")
+	}
+}
+
+func TestApplicationErrorAliasPreservesUpstreamExtensions(t *testing.T) {
+	a := &Adapter{}
+	want := object{"code": marshal("upstream_extension"), "detail": marshal(7)}
+	r := a.decorate("onto_defects", object{}, jsonTool(object{"error": marshal("failed"), "error_code": marshal("analysis_failed"), "application_error": marshal(want)}))
+	p := failurePayload(t, r, nil)
+	if string(p["application_error"]) != string(marshal(want)) {
+		t.Fatal("upstream error extension overwritten", string(r))
 	}
 }
 

@@ -19,6 +19,8 @@ def run(args):
         p = json.loads(r['content'][0]['text'])
         assert bool(r.get('isError')) == error, (name, p)
         assert r.get('structuredContent') == p
+        if error and 'error_code' in p:
+            assert p['application_error']['code'] == p['error_code']
         return p
     try:
         if args.allow_qa_writes:
