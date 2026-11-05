@@ -9,7 +9,7 @@ import (
 	"unicode"
 )
 
-var scopedTools = map[string]bool{"onto_reason": true, "onto_defects": true, "onto_dl_check": true, "onto_dl_explain": true, "onto_justify": true, "onto_shacl": true}
+var scopedTools = map[string]bool{"onto_reason": true, "onto_defects": true, "onto_classify_el": true, "onto_dl_check": true, "onto_dl_explain": true, "onto_justify": true, "onto_shacl": true}
 
 func normalizeIRI(s string) (string, error) {
 	s = strings.TrimSpace(s)
@@ -43,6 +43,12 @@ func overlayCatalog(raw json.RawMessage) (json.RawMessage, error) {
 			return nil, errors.New("upstream now supplies onto_action_info; review the adapter before upgrading")
 		}
 		switch name {
+		case "onto_classify_el":
+			tool["description"] = marshal("Classify OWL 2 EL in a bounded private native worker. Supply ontology_turtle or an exact graph_iri; otherwise snapshot all graphs. Snapshots are limited to 10,000 rows/4 MiB. max_seconds is 1–20, default 15, including queue/snapshot/worker time. Oversized/deadline failures return isError=true and complete=false. Native complete/incompleteness are preserved; analysis_complete only means the selected-dataset computation finished. External graph dependencies are not automatically included.")
+		case "onto_align":
+			tool["description"] = marshal("Find native alignment candidates using the supplied source and optional target (otherwise the loaded store). Native confidence is a similarity/fusion score, not an equivalence probability. Auto-eligibility also requires evidence_coverage>=0.4 and at least two distinct known informative signals, plus native non-review/non-ambiguous status. Label-only or missing evidence requires review. Native evaluation always runs dry; dry_run=true publishes no RDF. Requested live application publishes eligible mappings in one native policy-guarded transaction, without retries. A denied batch applies none; transport loss reports unknown outcome. Existing scoring/cardinality choices are retained; absent legacy evidence is not automatically approved.")
+		case "onto_search", "onto_embed":
+			tool["description"] = marshal(str(tool, "description") + " Optional runtime dependency: the native process must have a loaded embedding model; search also requires a populated index. Missing model/index returns an application error with setup guidance. File presence or core status:ok alone does not prove this mode is ready.")
 		case "onto_defects":
 			tool["description"] = marshal("Check eight native ontology-declaration defect kinds in a bounded private worker. Supply ontology_turtle for a private document or graph_iri for one exact named graph; otherwise analyze a snapshot of all graphs flattened together. Snapshots are limited to 10,000 rows/4 MiB. max_seconds is 1–20, default 15, including queue/snapshot/worker time. limit caps displayed findings only. Oversized/timed-out analyses return isError=true and complete=false, never a clean verdict or invented partial findings. A complete result applies only to the selected dataset; dependencies outside a named graph are not included.")
 		case "onto_crosswalk":
@@ -106,7 +112,7 @@ func overlayCatalog(raw json.RawMessage) (json.RawMessage, error) {
 			properties["ontology_turtle"] = stringField("Optional inline Turtle for a fresh request-local upstream process. Does not load or modify the shared store. At most 1 MiB. File-output options are rejected.")
 		}
 		switch name {
-		case "onto_defects":
+		case "onto_defects", "onto_classify_el":
 			properties["graph_iri"] = stringField("Optional absolute IRI of one exact named graph to snapshot; excludes other graphs and their dependencies. Omit when supplying ontology_turtle. Default scope is the union of all graphs; snapshots over 10,000 rows/4 MiB are refused.")
 			properties["max_seconds"] = marshal(map[string]any{"type": []string{"integer", "null"}, "minimum": 1, "maximum": 20, "description": "Whole analysis budget including queue, snapshot and worker. Default 15 seconds. Expiry is an error with complete=false; no partial native findings are fabricated."})
 		case "onto_convert":

@@ -58,10 +58,7 @@
       "readOnlyHint": true
     },
     "onto_classify_el": {
-      "input_schema_sha256": [
-        "efddc7bd8bbcef73a14eb1ace1ffdaec81e518ef1e13c1e9271d0b8acb694a49"
-      ],
-      "readOnlyHint": true
+      "readOnlyHint": false
     },
     "onto_coevolve_dependency_graph": {
       "input_schema_sha256": [

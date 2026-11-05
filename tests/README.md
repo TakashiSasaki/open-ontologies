@@ -22,11 +22,15 @@ python3 tests/integration.py http://127.0.0.1:18083/mcp --allow-qa-writes --outp
 The explicit QA option additionally tests shared writes, stable inline
 provenance, ordinary server files, dry-run files, and mixed file/inline diff.
 Each write run uses a unique test namespace; it is not a cleanup operation.
-All modes test five inline formats, six private analysis tools, class IRI
+All modes test five inline formats, seven private analysis tools, class IRI
 normalization, blank nodes, explicit null paths, invalid/ambiguous/oversized
 inputs, prohibited file-output options and 16 concurrent private calls.
 
-The full adapted catalog now has 125 tools, with 39 reviewed read-only grants.
+The full adapted catalog has 125 tools, with 38 current reviewed read-only grants.
+The expanded EL schema does not inherit the old true grant; its snapshot reads
+can trigger native cache reloads. `integration.py --expected-read-only` can
+qualify an explicitly selected historical policy separately.
+
 `onto_action_info` is the additional tool. For the 2026-11-05 audit regressions,
 use the **disposable QA chain only**:
 
@@ -102,6 +106,16 @@ requires `--allow-qa-writes`, a disposable native/adapter pair and its mounted
 `--data-dir`, and refuses the live ports. Capture that adapter's journal and use
 `check --require-backend-limit` to assert the real `backend_output_limit` record.
 Do not use this mutating large fixture against production.
+
+`el_alignment.py <modern-url> --output <private-file>` verifies private EL
+classification including preserved native incompleteness, oversized shared-scope
+refusal, evidence-based dry-run partitions, model readiness errors, the optional
+17-tool core profile and unchanged shared count. With `--allow-qa-writes`, an
+isolated native endpoint and mounted data directory, it additionally seeds named
+graphs, proves label-only live requests publish nothing, publishes one strong
+mapping additively, and verifies a native policy blocks the complete next batch.
+This option refuses this host's production ports. It must use a fresh QA store;
+native file loading replaces its dataset and policy fixtures affect later writes.
 
 `scalability.py <modern-url> --output <private-file>` tests bounded private defect
 analysis, invalid scopes/budgets, clinical dependency errors and malformed RDF,

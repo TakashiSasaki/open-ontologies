@@ -84,6 +84,23 @@ func (a *Adapter) decorate(name string, args object, raw json.RawMessage) json.R
 	if supplied(p, "error") && string(p["error"]) != `""` {
 		result["isError"] = marshal(true)
 		changed := summarizePolicyDenial(p)
+		if name == "onto_search" || name == "onto_embed" {
+			problem := str(p, "error")
+			if strings.HasPrefix(problem, "Compiled without embeddings feature.") {
+				p["error_code"], p["dependency"] = marshal("feature_unavailable"), marshal("embeddings_feature")
+				p["hint"] = marshal("This native build lacks embeddings support; model files alone cannot enable it. Select a qualified image built with the embeddings feature.")
+				changed = true
+			}
+			if strings.HasPrefix(problem, "Embedding model not loaded.") || strings.HasPrefix(problem, "No embeddings loaded.") {
+				dependency, hint := "embedding_model", "Load the configured model inside the backend process; downloading files alone does not initialize an already-running process. Then explicitly run onto_embed to build an index."
+				if strings.HasPrefix(problem, "No embeddings loaded.") {
+					dependency, hint = "embedding_index", "The backend has no usable index. Explicitly run onto_embed after configuring/loading its model; inspect the requested search mode and onto_status capability inventory."
+				}
+				p["error_code"], p["dependency"], p["hint"] = marshal("dependency_unavailable"), marshal(dependency), marshal(hint)
+				p["configuration_required"] = marshal(true)
+				changed = true
+			}
+		}
 		if (name == "onto_crosswalk" || name == "onto_enrich" || name == "onto_validate_clinical") && strings.HasPrefix(str(p, "error"), "Crosswalks not loaded:") {
 			p["error_code"], p["dependency"] = marshal("dependency_unavailable"), marshal("clinical_crosswalk")
 			p["configuration_required"] = marshal(true)
@@ -120,7 +137,7 @@ func (a *Adapter) decorate(name string, args object, raw json.RawMessage) json.R
 	case "onto_align":
 		p["dry_run"] = marshal(boolean(args, "dry_run"))
 		p["confidence_semantics"] = marshal("Similarity/fusion score, not a calibrated probability of semantic equivalence. Review evidence coverage independently.")
-		if boolean(args, "dry_run") {
+		if boolean(args, "dry_run") && !supplied(p, "evidence_policy") {
 			var candidates, borderline []json.RawMessage
 			_ = json.Unmarshal(p["auto_applied"], &candidates)
 			_ = json.Unmarshal(p["borderline"], &borderline)
@@ -138,6 +155,7 @@ func (a *Adapter) decorate(name string, args object, raw json.RawMessage) json.R
 		p["tools"] = marshal(125)
 		p["adapter_version"] = marshal(a.Version)
 		p["status_scope"] = marshal("Core MCP service health; does not imply every optional tool/mode is ready.")
+		p["tool_count_scope"] = marshal("Full adapter catalog before frontend profile filtering. Use tools/list at the selected endpoint for its actual catalog; native tool_surface describes the backend.")
 		p["capabilities"] = a.capabilities()
 		changed = true
 	}

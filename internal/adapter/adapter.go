@@ -188,7 +188,7 @@ func (a *Adapter) respond(w http.ResponseWriter, id, result json.RawMessage) {
 	_, _ = w.Write(marshal(message{Version: "2.0", ID: id, Result: result}))
 }
 func needsAdaptation(name string, args object) bool {
-	if name == "onto_defects" {
+	if name == "onto_defects" || name == "onto_classify_el" || name == "onto_align" {
 		return true
 	}
 	return (name == "onto_convert" && (supplied(args, "inline_content") || supplied(args, "from"))) || auditedTools[name] || name == "onto_dl_check" || name == "onto_dl_explain" || (scopedTools[name] && supplied(args, "ontology_turtle")) || (name == "onto_ingest" && (supplied(args, "inline_data") || boolean(args, "dry_run"))) || (name == "onto_diff" && (supplied(args, "old_content") || supplied(args, "new_content")))
@@ -219,6 +219,12 @@ func (a *Adapter) adapt(ctx context.Context, h http.Header, name string, args ob
 	args = clone(args)
 	if name == "onto_defects" {
 		return a.defects(ctx, h, args)
+	}
+	if name == "onto_classify_el" {
+		return a.boundedAnalysis(ctx, h, name, args)
+	}
+	if name == "onto_align" {
+		return a.align(ctx, h, args)
 	}
 	if name == "onto_convert" {
 		return a.convert(ctx, args)

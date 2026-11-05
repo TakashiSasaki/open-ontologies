@@ -51,7 +51,7 @@ def run(args):
         assert before['version']==args.expected_version,before['version']
         tools=c.tools();assert len(tools)==125
         annotated=sum(bool(t.get('annotations',{}).get('readOnlyHint')) for t in tools)
-        if not args.legacy:assert annotated==39,annotated
+        if not args.legacy:assert annotated==args.expected_read_only,annotated
         assert 'inline_data' in next(t['inputSchema']['properties'] for t in tools if t['name']=='onto_ingest')
         checks.append('catalog_and_annotations')
         for fmt,data in [('json','[{"id":1,"name":"Ada"}]'),('csv','id,name\n1,Ada\n'),('ndjson','{"id":1,"name":"Ada"}\n'),('xml','<root><row><id>1</id><name>Ada</name></row></root>'),('yaml','- id: 1\n  name: Ada\n')]:
@@ -62,7 +62,7 @@ def run(args):
             p=call(c,'onto_dl_explain',{'ontology_turtle':ONTOLOGY,'class_iri':iri})
             assert p['satisfiable'] is False and p['execution_scope']=='request' and p['persistent_store_modified'] is False
         checks.append('bare_and_bracketed_IRI')
-        analysis=[('onto_reason',{'profile':'rdfs','materialize':True}),('onto_defects',{}),('onto_dl_check',{'sub_class':'https://example.org/adapter-test#CatDog','super_class':'https://example.org/adapter-test#Cat'}),('onto_justify',{'triple':'<https://example.org/adapter-test#CatDog> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <https://example.org/adapter-test#Cat>'}),('onto_shacl',{'shapes':SHAPES,'inline':True})]
+        analysis=[('onto_reason',{'profile':'rdfs','materialize':True}),('onto_defects',{}),('onto_classify_el',{}),('onto_dl_check',{'sub_class':'https://example.org/adapter-test#CatDog','super_class':'https://example.org/adapter-test#Cat'}),('onto_justify',{'triple':'<https://example.org/adapter-test#CatDog> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <https://example.org/adapter-test#Cat>'}),('onto_shacl',{'shapes':SHAPES,'inline':True})]
         for name,params in analysis:
             p=call(c,name,dict(params,ontology_turtle=ONTOLOGY))
             assert p['execution_scope']=='request' and p['persistent_store_modified'] is False,(name,p)
@@ -106,4 +106,4 @@ def run(args):
     finally:c.close()
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('url');p.add_argument('--legacy',action='store_true');p.add_argument('--allow-qa-writes',action='store_true');p.add_argument('--expected-version',default='2.1.0');p.add_argument('--client-script',type=Path,default=Path('/data/mcp-compat-proxy/main/scripts/check-http.py'));p.add_argument('--output',required=True,type=Path);run(p.parse_args())
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('url');p.add_argument('--legacy',action='store_true');p.add_argument('--allow-qa-writes',action='store_true');p.add_argument('--expected-version',default='2.1.0');p.add_argument('--expected-read-only',type=int,default=38);p.add_argument('--client-script',type=Path,default=Path('/data/mcp-compat-proxy/main/scripts/check-http.py'));p.add_argument('--output',required=True,type=Path);run(p.parse_args())

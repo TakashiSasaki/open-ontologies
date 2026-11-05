@@ -151,7 +151,9 @@ After explicitly reviewing a new adapted catalog, regenerate its grants with:
 go run ./cmd/pin-annotations --catalog /private/evidence/reviewed-tools.json --reviewed-tools deploy/read-only-tools.json
 ```
 
-The conservative 39-tool audit concerns published/shared data. Inline diff uses
+The conservative audit now grants 38 tools read-only status. EL classification's
+expanded snapshot mode uses native cache-aware reads, so its old true grant is
+withheld rather than inherited by the changed schema. Inline diff uses
 only disposable private scratch files. Registry refresh, persistent schema
 initialization, shared indexes, optional output and external checker paths stay
 false. Annotations are advisory metadata, not access control.
@@ -322,3 +324,37 @@ Application errors with a service `error_code` also retain that category in
 the structured result's top-level `error_code` with `INVALID_ARGUMENT`, while the
 text content retained `dependency_unavailable`. The nested category avoids this
 collision. Existing upstream `application_error` extensions are preserved.
+
+## Scoped EL classification and evidence-gated alignment
+
+`onto_classify_el` accepts the same `ontology_turtle`, `graph_iri` and `max_seconds`
+selection/budget controls as bounded defect analysis. Native `complete` and
+`incompleteness` remain authoritative; `analysis_complete:true` only means the
+selected computation finished. Oversized selections/timeouts are incomplete
+application errors, never a manufactured complete classification.
+
+`onto_align` always evaluates with native `dry_run:true` before RDF publication.
+Auto-eligibility requires native non-review/unambiguous status,
+`evidence_coverage>=0.4` and at least two distinct known `informative_signals`.
+Missing legacy evidence, label-only matches and unsupported mapping terms move
+to `borderline`. Scores stay unchanged. This post-selection gate cannot recover
+alternatives already removed by native cardinality selection.
+
+Requested live application publishes eligible triples through one additive native
+inline-load transaction, preserving the policy guard. A denial fails the batch;
+lost replies report unknown outcome and are never retried. Dry runs publish no
+RDF, though native evaluation can record lineage. `auto_apply_candidates` lists
+eligible rows, `auto_applied` published rows, and `evidence_policy` explains the gate.
+
+Merge [deploy/core-profile.json](deploy/core-profile.json) into the generic proxy's
+configuration for an optional `/mcp/core` catalog of 17 tools. Existing `/mcp`
+and the four profiles remain available. `onto_status.tools` describes the full
+adapter; use `tools/list` at the chosen endpoint for its actual catalog. Operator
+capability metadata can list configured endpoints. Model/index errors include
+setup guidance; volatile snapshots do not silently hide mixed-mode tools.
+
+Named graphs provide dataset scope, not tenant authorization. Inline loads bypass
+the native file cache, so `active:null` can coexist with populated persistent data.
+This adapter does not retrospectively partition imports or implement a named-graph
+writer by replacing/restoring the live dataset. See the
+[plan](docs/SCOPED-CLASSIFICATION-ALIGNMENT-PLAN-2026-11-05.md).

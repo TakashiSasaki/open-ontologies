@@ -15,7 +15,7 @@ const maxDefectBytes = 4 << 20
 
 func defectFailure(code, reason string, scope object) json.RawMessage {
 	return jsonTool(object{"error": marshal(reason), "error_code": marshal(code),
-		"complete": marshal(false), "partial_results_available": marshal(false),
+		"complete": marshal(false), "analysis_complete": marshal(false), "partial_results_available": marshal(false),
 		"persistent_store_modified": marshal(false), "analysis_scope": marshal(scope),
 		"hint": marshal("Select a smaller named graph with graph_iri, or supply a relevant ontology_turtle document. No complete global verdict was obtained.")})
 }
@@ -23,13 +23,17 @@ func defectFailure(code, reason string, scope object) json.RawMessage {
 // Native limit only caps displayed findings. Analyze a bounded dataset in a
 // process we can cancel/reap, without ever loading the user's shared store.
 func (a *Adapter) defects(ctx context.Context, h http.Header, args object) (json.RawMessage, error) {
+	return a.boundedAnalysis(ctx, h, "onto_defects", args)
+}
+
+func (a *Adapter) boundedAnalysis(ctx context.Context, h http.Header, name string, args object) (json.RawMessage, error) {
 	scope := object{"kind": marshal("shared_snapshot_union"), "global_verdict": marshal(false)}
 	fail := func(code, reason string) (json.RawMessage, error) { return defectFailure(code, reason, scope), nil }
 	seconds := 15
 	if supplied(args, "max_seconds") && (json.Unmarshal(args["max_seconds"], &seconds) != nil || seconds < 1 || seconds > 20) {
 		return fail("invalid_arguments", "max_seconds must be an integer from 1 to 20")
 	}
-	if supplied(args, "limit") {
+	if name == "onto_defects" && supplied(args, "limit") {
 		var limit uint64
 		if json.Unmarshal(args["limit"], &limit) != nil {
 			return fail("invalid_arguments", "limit must be a nonnegative integer")
@@ -97,14 +101,14 @@ func (a *Adapter) defects(ctx context.Context, h http.Header, args object) (json
 		scope["snapshot_semantics"] = marshal("One SPARQL read flattened to a private dataset; later changes excluded. Named-graph scope excludes other graphs and their dependencies.")
 	}
 	workerArgs := object{}
-	if supplied(args, "limit") {
+	if name == "onto_defects" && supplied(args, "limit") {
 		workerArgs["limit"] = args["limit"]
 	}
 	result, err := a.withWorker(ctx, func(w *worker) (json.RawMessage, error) {
 		if _, e := w.checked("onto_load", object{"turtle": marshal(turtle)}); e != nil {
 			return nil, e
 		}
-		return w.call("onto_defects", workerArgs)
+		return w.call(name, workerArgs)
 	})
 	if ctx.Err() != nil {
 		return interrupted("The analysis deadline expired; the private worker was stopped and no complete findings are available")
@@ -114,7 +118,11 @@ func (a *Adapter) defects(ctx context.Context, h http.Header, args object) (json
 		p, err = payload(result)
 		if err == nil {
 			p["execution_scope"], p["persistent_store_modified"] = marshal("request"), marshal(false)
-			p["complete"], p["completeness_scope"] = marshal(true), marshal("selected dataset only; not a global OWL consistency verdict")
+			p["analysis_complete"] = marshal(true)
+			if name == "onto_defects" {
+				p["complete"] = marshal(true)
+			}
+			p["completeness_scope"] = marshal("selected dataset only; native fragment limits/incompleteness retained, not a global OWL consistency verdict")
 			p["analysis_scope"], p["max_seconds"] = marshal(scope), marshal(seconds)
 			return jsonTool(p), nil
 		}

@@ -116,6 +116,8 @@ for line in sys.stdin:
   elif name=='onto_defects':
    if os.path.exists(%q): time.sleep(30)
    value={'defect_count':0,'kinds_checked':[],'truncated':{}}
+  elif name=='onto_classify_el':
+   value={'complete':False,'incompleteness':{'outside_el':1},'subsumptions':[]}
   else: raise Exception('unexpected tool')
   result={'content':[{'type':'text','text':json.dumps(value)}]}
  print(json.dumps({'jsonrpc':'2.0','id':q['id'],'result':result}),flush=True)
@@ -221,5 +223,37 @@ func TestCancelledDefectIsNotReportedAsDeadlineOrCleanResult(t *testing.T) {
 	p := failurePayload(t, raw, err)
 	if str(p, "error_code") != "analysis_cancelled" || boolean(p, "complete") {
 		t.Fatal(string(raw))
+	}
+}
+
+func TestBoundedELRetainsNativeLogicalIncompleteness(t *testing.T) {
+	a := &Adapter{}
+	installFakeDefectWorker(t, a)
+	r, e := a.boundedAnalysis(context.Background(), http.Header{}, "onto_classify_el", object{"ontology_turtle": marshal("<urn:s> <urn:p> 1 .")})
+	p := failurePayload(t, r, e)
+	if boolean(p, "complete") || !boolean(p, "analysis_complete") || !supplied(p, "incompleteness") || boolean(p, "persistent_store_modified") {
+		t.Fatal(string(r))
+	}
+	a, calls, _ := snapshotFixture(t, make([]map[string]string, maxDefectRows+1))
+	r, e = a.boundedAnalysis(context.Background(), http.Header{}, "onto_classify_el", object{})
+	p = failurePayload(t, r, e)
+	if str(p, "error_code") != "analysis_scope_required" || calls.Load() != 1 {
+		t.Fatal(string(r))
+	}
+}
+
+func TestMissingEmbeddingResourcesAreActionableWithoutChangingSuccess(t *testing.T) {
+	a := &Adapter{}
+	for problem, dependency := range map[string]string{"Embedding model not loaded.": "embedding_model", "No embeddings loaded. Run onto_embed first.": "embedding_index"} {
+		r := a.decorate("onto_search", object{}, jsonTool(object{"error": marshal(problem)}))
+		p := failurePayload(t, r, nil)
+		if str(p, "dependency") != dependency || str(p, "error_code") != "dependency_unavailable" || str(p, "hint") == "" {
+			t.Fatal(string(r))
+		}
+	}
+	r := a.decorate("onto_search", object{}, jsonTool(object{"results": marshal([]any{})}))
+	p := failurePayload(t, r, nil)
+	if supplied(p, "error") {
+		t.Fatal("empty successful result changed")
 	}
 }

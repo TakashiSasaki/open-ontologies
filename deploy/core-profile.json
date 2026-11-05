@@ -1,0 +1,23 @@
+{
+  "profiles": {
+    "core": [
+      "onto_status",
+      "onto_load",
+      "onto_query",
+      "onto_stats",
+      "onto_validate",
+      "onto_convert",
+      "onto_reason",
+      "onto_classify_el",
+      "onto_defects",
+      "onto_shacl",
+      "onto_shacl_check",
+      "onto_lint",
+      "onto_align",
+      "onto_diff",
+      "onto_cache_list",
+      "onto_repo_list",
+      "onto_action_info"
+    ]
+  }
+}
