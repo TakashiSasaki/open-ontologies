@@ -12,3 +12,8 @@
   in copyright notices. License: MIT.
 - Run go test -race ./..., go vet ./..., and actual upstream-worker integration
   before deploying. Record image and worker hashes outside source as appropriate.
+
+- The separate public web binary must keep an exact read/calculate route allowlist.
+  Never expose raw MCP/native REST, arbitrary SPARQL or shared-store writes there.
+  Use fixed graph scopes, native direct-read queries and disposable pinned workers.
+  Public HTML/JavaScript belongs in the separate site repository.

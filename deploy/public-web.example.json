@@ -1,0 +1,10 @@
+{
+  "engine": {
+    "backend_url": "http://127.0.0.1:18080",
+    "worker_binary": "/usr/local/libexec/open-ontologies-native-PINNED-COMMIT",
+    "worker_sha256": "REPLACE_WITH_ACTUAL_WORKER_SHA256",
+    "upstream_version": "REPLACE_WITH_EXACT_NATIVE_VERSION",
+    "work_root": "/run/open-ontologies-web/requests"
+  },
+  "graphs": ["default"]
+}

@@ -27,6 +27,10 @@ type worker struct {
 }
 
 func startWorker(ctx context.Context, binary, root, version string) (_ *worker, err error) {
+	return startWorkerLimited(ctx, binary, root, version, 0)
+}
+
+func startWorkerLimited(ctx context.Context, binary, root, version string, memoryMiB int) (_ *worker, err error) {
 	dir, err := os.MkdirTemp(root, "request-")
 	if err != nil {
 		return nil, observe(codeScratch, stageWorkspace, err)
@@ -38,6 +42,10 @@ func startWorker(ctx context.Context, binary, root, version string) (_ *worker, 
 		}
 	}()
 	w.cmd = exec.CommandContext(ctx, binary, "serve", "--no-connect", "--data-dir", filepath.Join(dir, "state"), "--storage-mode", "memory", "--config", filepath.Join(dir, "absent.toml"), "--tools-allow", workerTools)
+	if memoryMiB != 0 {
+		args := append([]string{fmt.Sprintf("--as=%d", int64(memoryMiB)<<20), "--cpu=20", "--fsize=8388608", "--nofile=128", "--"}, w.cmd.Args...)
+		w.cmd = exec.CommandContext(ctx, "/usr/bin/prlimit", args...)
+	}
 	w.cmd.Dir = dir
 	// Do not pass credentials, persistent HOME, checker/model overrides or the
 	// host's storage configuration into an isolated analysis process.

@@ -24,6 +24,13 @@ The generic proxy remains in its independent repository and owns modern MCP,
 profiles, JSON projection and configurable annotations. Application-specific
 semantics and the annotation audit live here. Neither proxy reads tunnel keys.
 
+## Public human-facing API
+
+The separate `cmd/open-ontologies-web` binary exposes bounded, read-only browsing
+and temporary-input calculations for the public website. It does not replace the
+MCP adapter or change existing MCP access restrictions. See
+[the API, isolation and deployment guide](docs/PUBLIC-WEB.md).
+
 ## Adapted inputs
 
 | Tool | Added behavior |

@@ -1,0 +1,48 @@
+# Copyright (c) 2026 佐々木隆志 (Takashi Sasaki) <takashi316@gmail.com> (https://x.com/TakashiSasaki)
+[Unit]
+Description=Open Ontologies public read-only web API
+After=network-online.target docker.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+DynamicUser=yes
+User=open-ontologies-web
+RuntimeDirectory=open-ontologies-web
+RuntimeDirectoryMode=0700
+WorkingDirectory=/run/open-ontologies-web
+ExecStart=/usr/local/bin/open-ontologies-web --listen 127.0.0.1:18085 --config /etc/open-ontologies-web.json
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+InaccessiblePaths=/data
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+MemoryHigh=1G
+MemoryMax=1536M
+MemorySwapMax=0
+CPUQuota=100%
+TasksMax=128
+LimitNOFILE=1024
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

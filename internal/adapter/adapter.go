@@ -31,6 +31,7 @@ type Config struct {
 	CapabilityFile        string            `json:"capability_file,omitempty"`
 	MaxWorkers            int               `json:"max_workers,omitempty"`
 	TimeoutSeconds        int               `json:"timeout_seconds,omitempty"`
+	WorkerMemoryMiB       int               `json:"worker_memory_mib,omitempty"`
 }
 type Adapter struct {
 	cfg      Config
@@ -68,6 +69,9 @@ func New(cfg Config, version string) (*Adapter, error) {
 	}
 	if cfg.TimeoutSeconds < 1 || cfg.TimeoutSeconds > 300 {
 		return nil, errors.New("timeout_seconds must be between 1 and 300")
+	}
+	if cfg.WorkerMemoryMiB != 0 && (cfg.WorkerMemoryMiB < 128 || cfg.WorkerMemoryMiB > 1024) {
+		return nil, errors.New("worker_memory_mib must be zero or between 128 and 1024")
 	}
 	for backend, local := range cfg.ServerDataRoots {
 		if !filepath.IsAbs(backend) || !filepath.IsAbs(local) {
@@ -201,7 +205,7 @@ func (a *Adapter) withWorker(ctx context.Context, fn func(*worker) (json.RawMess
 	case <-ctx.Done():
 		return nil, observe(codeDeadline, stageCapacity, errors.New("private worker capacity/deadline exceeded; shared store was not touched"))
 	}
-	w, e := startWorker(ctx, a.cfg.WorkerBinary, a.cfg.WorkRoot, a.Version)
+	w, e := startWorkerLimited(ctx, a.cfg.WorkerBinary, a.cfg.WorkRoot, a.Version, a.cfg.WorkerMemoryMiB)
 	if e != nil {
 		return nil, e
 	}
