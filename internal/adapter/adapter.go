@@ -110,6 +110,12 @@ func (a *Adapter) Handler() http.Handler {
 	return http.NewCrossOriginProtection().Handler(mux)
 }
 func (a *Adapter) serveMCP(w http.ResponseWriter, r *http.Request) {
+	refs := r.Header.Values(callRefHeader)
+	r.Header.Del(callRefHeader)
+	peer, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if len(refs) == 1 && net.ParseIP(peer).IsLoopback() && callRefPattern.MatchString(refs[0]) {
+		r = r.WithContext(context.WithValue(r.Context(), callRefKey{}, refs[0]))
+	}
 	if r.Method != "POST" {
 		a.proxy.ServeHTTP(w, r)
 		return

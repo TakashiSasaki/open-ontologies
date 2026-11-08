@@ -88,6 +88,9 @@ func TestAdaptedHTTPValidationLogsDiagnosticsWithoutChangingResponse(t *testing.
 	recorder := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(marshal(request)))
 	r.Header.Set("Content-Type", "application/json")
+	const callRef = "0123456789abcdef0123456789abcdef"
+	r.Header.Set(callRefHeader, callRef)
+	r.RemoteAddr = "127.0.0.1:4444"
 	a.Handler().ServeHTTP(recorder, r)
 	if recorder.Code != 200 {
 		t.Fatal(recorder.Code)
@@ -102,8 +105,56 @@ func TestAdaptedHTTPValidationLogsDiagnosticsWithoutChangingResponse(t *testing.
 	if str(entry, "error_code") != string(codeArguments) || str(entry, "error_stage") != string(stageArguments) || str(entry, "target_format") != "rdfxml" {
 		t.Fatal(buffer.String())
 	}
+	if str(entry, "call_ref") != callRef || strings.Contains(recorder.Body.String(), callRef) {
+		t.Fatal("call reference must appear only in diagnostics")
+	}
 	if strings.Contains(buffer.String(), "PRIVATE_") {
 		t.Fatal("request ID or content logged")
+	}
+}
+
+func TestCallReferenceIsValidatedAndStrippedBeforeUpstream(t *testing.T) {
+	const ref = "fedcba9876543210fedcba9876543210"
+	for _, test := range []struct {
+		name, peer, want string
+		headers          []string
+	}{
+		{"loopback", "127.0.0.1:4444", ref, []string{ref}},
+		{"remote", "192.0.2.1:4444", "", []string{ref}},
+		{"invalid", "127.0.0.1:4444", "", []string{"PRIVATE_HEADER"}},
+		{"duplicate", "127.0.0.1:4444", "", []string{ref, ref}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if len(r.Header.Values(callRefHeader)) != 0 {
+					t.Error("diagnostic header forwarded to native backend")
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, "invalid backend envelope")
+			}))
+			defer backend.Close()
+			u, err := url.Parse(backend.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			a := diagnosticAdapter(&logs)
+			a.proxy = httputil.NewSingleHostReverseProxy(u)
+			a.proxy.ModifyResponse = a.modifyResponse
+			a.proxy.ErrorHandler = a.proxyFailure
+			request := httptest.NewRequest(http.MethodPost, "/mcp",
+				strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"onto_status","arguments":{}}}`))
+			request.RemoteAddr = test.peer
+			for _, value := range test.headers {
+				request.Header.Add(callRefHeader, value)
+			}
+			response := httptest.NewRecorder()
+			a.Handler().ServeHTTP(response, request)
+			if response.Code != http.StatusBadGateway || str(logObject(t, &logs), "call_ref") != test.want ||
+				strings.Contains(logs.String(), "PRIVATE_HEADER") {
+				t.Fatal("unexpected HTTP response or reference", response.Code, logs.String())
+			}
+		})
 	}
 }
 

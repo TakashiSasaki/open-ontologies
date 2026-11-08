@@ -8,10 +8,17 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
+
+const callRefHeader = "X-Mcp-Call-Ref"
+
+type callRefKey struct{}
+
+var callRefPattern = regexp.MustCompile("^[0-9a-f]{32}$")
 
 type errorCode string
 type errorStage string
@@ -177,6 +184,9 @@ func (a *Adapter) logDiagnosticCall(message string, ctx context.Context, name st
 	}
 	attrs := []any{"tool", safeAdaptedTool(name),
 		"adapter_error", callErr != nil, "is_error", err != nil, "result_bytes", len(result), "adapter_version", a.Version}
+	if ref, ok := ctx.Value(callRefKey{}).(string); ok {
+		attrs = append(attrs, "call_ref", ref)
+	}
 	if !started.IsZero() {
 		attrs = append(attrs, "duration_ms", time.Since(started).Milliseconds())
 	}

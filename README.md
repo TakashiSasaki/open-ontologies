@@ -259,6 +259,11 @@ copied from a caller ID, and is not added to MCP responses. SHA-256 is computed
 from the error text before JSON encoding; it is not a hash of the input ontology.
 Variable values/paths in errors can change that digest between requests.
 
+When the compatibility proxy supplies a valid loopback `X-Mcp-Call-Ref`,
+adapted-call and upstream-failure records also carry `call_ref` for joining
+them to the proxy's completion log. The adapter consumes that header at
+ingress, so the native engine and MCP response are outside its scope.
+
 Categories distinguish validation/size/file-IRI rejections, native conversion
 operations, workspace I/O, worker startup/I/O/protocol/RPC/exit/output/identity,
 and interrupted worker deadlines/cancellation. Conversion stages distinguish
